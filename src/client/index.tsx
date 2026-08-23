@@ -8,7 +8,7 @@
  * current model exposes — their count and order are the adapter's, never
  * assumed here.
  *
- * @module dsh-better-model-selector/client
+ * @module dsh-model-selector/client
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react'
@@ -41,17 +41,19 @@ interface ModelSeatProps {
 
 const SLOT = 'conversation.input.model'
 const SETTINGS_SLOT = 'settings.general.item'
-const ENABLED_STORAGE_KEY = 'dsh-better-model-selector.enabled'
+const ENABLED_STORAGE_KEY = 'dsh-model-selector.enabled'
 const LEGACY_ENABLED_STORAGE_KEY = '@dsh-external/dsh-reasoning-effort.enabled'
-const OLD_ENABLED_STORAGE_KEY = 'dsh-reasoning-effort.enabled'
-const CHIBI_THUMB_STORAGE_KEY = 'dsh-better-model-selector.chibi-thumb'
-const OLD_CHIBI_THUMB_STORAGE_KEY = 'dsh-reasoning-effort.chibi-thumb'
+const OLD_ENABLED_STORAGE_KEY = 'dsh-better-model-selector.enabled'
+const OLDER_ENABLED_STORAGE_KEY = 'dsh-reasoning-effort.enabled'
+const CHIBI_THUMB_STORAGE_KEY = 'dsh-model-selector.chibi-thumb'
+const OLD_CHIBI_THUMB_STORAGE_KEY = 'dsh-better-model-selector.chibi-thumb'
+const OLDER_CHIBI_THUMB_STORAGE_KEY = 'dsh-reasoning-effort.chibi-thumb'
 export const inject = ['slots', 'modelDirectories']
 
 function readEnabledPreference(): boolean {
   try {
     const current = window.localStorage.getItem(ENABLED_STORAGE_KEY)
-    const stored = current ?? window.localStorage.getItem(OLD_ENABLED_STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_ENABLED_STORAGE_KEY)
+    const stored = current ?? window.localStorage.getItem(OLD_ENABLED_STORAGE_KEY) ?? window.localStorage.getItem(OLDER_ENABLED_STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_ENABLED_STORAGE_KEY)
     return stored !== 'false'
   } catch {
     return true
@@ -83,7 +85,7 @@ const enabledStore = {
 
 function readChibiThumbPreference(): boolean {
   try {
-    return (window.localStorage.getItem(CHIBI_THUMB_STORAGE_KEY) ?? window.localStorage.getItem(OLD_CHIBI_THUMB_STORAGE_KEY)) === 'true'
+    return (window.localStorage.getItem(CHIBI_THUMB_STORAGE_KEY) ?? window.localStorage.getItem(OLD_CHIBI_THUMB_STORAGE_KEY) ?? window.localStorage.getItem(OLDER_CHIBI_THUMB_STORAGE_KEY)) === 'true'
   } catch {
     return false
   }
@@ -115,13 +117,14 @@ const chibiThumbStore = {
 // ---------------------------------------------------------------------------
 // Model alias (short name) store.
 // ---------------------------------------------------------------------------
-const ALIAS_STORAGE_KEY = 'dsh-better-model-selector.model-aliases'
-const OLD_ALIAS_STORAGE_KEY = 'dsh-reasoning-effort.model-aliases'
+const ALIAS_STORAGE_KEY = 'dsh-model-selector.model-aliases'
+const OLD_ALIAS_STORAGE_KEY = 'dsh-better-model-selector.model-aliases'
+const OLDER_ALIAS_STORAGE_KEY = 'dsh-reasoning-effort.model-aliases'
 type AliasMap = Record<string, string>
 
 function readAliases(): AliasMap {
   try {
-    const raw = window.localStorage.getItem(ALIAS_STORAGE_KEY) ?? window.localStorage.getItem(OLD_ALIAS_STORAGE_KEY)
+    const raw = window.localStorage.getItem(ALIAS_STORAGE_KEY) ?? window.localStorage.getItem(OLD_ALIAS_STORAGE_KEY) ?? window.localStorage.getItem(OLDER_ALIAS_STORAGE_KEY)
     if (raw === null) return {}
     const parsed: unknown = JSON.parse(raw)
     if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
@@ -1020,7 +1023,7 @@ export function apply(ctx: ClientContext) {
 
   ctx.effect(() => {
     const style = document.createElement('style')
-    style.dataset.plugin = 'dsh-better-model-selector'
+    style.dataset.plugin = 'dsh-model-selector'
     style.textContent = CSS
     document.head.appendChild(style)
     return () => style.remove()
@@ -1040,14 +1043,14 @@ export function apply(ctx: ClientContext) {
 
   ctx.slots.inject(SETTINGS_SLOT, () =>
     ctx.slots.register(
-      { name: SETTINGS_SLOT, id: 'better-model-selector-enabled', order: 15 },
+      { name: SETTINGS_SLOT, id: 'dsh-model-selector-enabled', order: 15 },
       ReasoningEffortSetting,
     ),
   )
 
   ctx.slots.inject(SETTINGS_SLOT, () =>
     ctx.slots.register(
-      { name: SETTINGS_SLOT, id: 'better-model-selector-chibi-thumb', order: 16 },
+      { name: SETTINGS_SLOT, id: 'dsh-model-selector-chibi-thumb', order: 16 },
       ChibiThumbSetting,
     ),
   )

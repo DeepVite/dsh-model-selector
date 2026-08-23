@@ -1,4 +1,4 @@
-# dsh-better-model-selector
+# dsh-model-selector
 
 > Liang Valley plugin · Better model selector for DeepSeek Harness
 
@@ -41,10 +41,10 @@ Requires DSH with a web profile.
 
 ```bash
 # via npm (recommended)
-npm exec -- dsh plugin --profile web add dsh-better-model-selector
+npm exec -- dsh plugin --profile web add dsh-model-selector
 
 # or via GitHub
-npm exec -- dsh plugin --profile web add https://github.com/DeepVite/dsh-better-model-selector.git
+npm exec -- dsh plugin --profile web add https://github.com/DeepVite/dsh-model-selector.git
 ```
 
 Then **refresh the browser**. If a git install is blocked by pnpm's build-script guard, add the printed package key under `allowBuilds` in the profile's `pnpm-workspace.yaml` and re-run.
@@ -52,7 +52,7 @@ Then **refresh the browser**. If a git install is blocked by pnpm's build-script
 ## 🔄 Update
 
 ```bash
-npm exec -- dsh plugin --profile web update dsh-better-model-selector
+npm exec -- dsh plugin --profile web update dsh-model-selector
 ```
 
 ---

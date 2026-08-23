@@ -1,5 +1,5 @@
 {
-  "name": "dsh-better-model-selector",
+  "name": "dsh-model-selector",
   "version": "0.1.0",
   "description": "DeepSeek Harness model selector upgrade: one-level model & reasoning-effort picker with 5 Liang tiers, custom model aliases, and peak/off-peak price countdown.",
   "keywords": [
@@ -15,13 +15,13 @@
     "cordis"
   ],
   "author": "DeepVite <ibronfree@gmail.com>",
-  "homepage": "https://github.com/DeepVite/dsh-better-model-selector#readme",
+  "homepage": "https://github.com/DeepVite/dsh-model-selector#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/DeepVite/dsh-better-model-selector.git"
+    "url": "git+https://github.com/DeepVite/dsh-model-selector.git"
   },
   "bugs": {
-    "url": "https://github.com/DeepVite/dsh-better-model-selector/issues"
+    "url": "https://github.com/DeepVite/dsh-model-selector/issues"
   },
   "engines": {
     "node": ">=22.19"

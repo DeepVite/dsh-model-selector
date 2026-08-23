@@ -1,4 +1,4 @@
-# dsh-better-model-selector
+# dsh-model-selector
 
 > 梁文谷插件 · DeepSeek Harness 模型选择器升级
 
@@ -41,10 +41,10 @@ DSH（DeepSeek Harness）模型选择与推理档位插件的增强版：把模�
 
 ```bash
 # 通过 npm（推荐）
-npm exec -- dsh plugin --profile web add dsh-better-model-selector
+npm exec -- dsh plugin --profile web add dsh-model-selector
 
 # 或通过 GitHub 仓库
-npm exec -- dsh plugin --profile web add https://github.com/DeepVite/dsh-better-model-selector.git
+npm exec -- dsh plugin --profile web add https://github.com/DeepVite/dsh-model-selector.git
 ```
 
 安装后**刷新浏览器**即可看到效果。若 git 安装提示 pnpm 拦截构建脚本，按提示把包名加入 profile 的 `pnpm-workspace.yaml` 的 `allowBuilds` 后再试。
@@ -52,7 +52,7 @@ npm exec -- dsh plugin --profile web add https://github.com/DeepVite/dsh-better-
 ## 🔄 更新
 
 ```bash
-npm exec -- dsh plugin --profile web update dsh-better-model-selector
+npm exec -- dsh plugin --profile web update dsh-model-selector
 ```
 
 ---
