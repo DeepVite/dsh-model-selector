@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.2.0] - 2026-08-23
+
+### Added
+- **Daily token usage stats**: a token panel that polls all sessions every 3 minutes and aggregates today's token usage per model, split into peak (梁文锋, full price) and off-peak (梁文谷, half price) buckets; shows "updating" state during the scan and a live result afterwards, with a `localStorage` cache between refreshes.
+- Both host and client halves ship the new stats capability (`connection.api.sessions.list` / `.history` walking with paging), new peer dependencies `@deepseek-ai/dsh-settings` + `@deepseek-ai/schemastery`.
+
 ## [0.1.0] - 2026-08-23
 
 ### Added

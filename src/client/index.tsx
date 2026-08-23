@@ -37,6 +37,30 @@ interface ModelSeatProps {
   readonly directory: SnapshotStore<ModelDirectoryState>
   readonly load: () => void
   readonly select: (selection: ModelSelection) => Promise<boolean>
+  readonly connection?: StatsConnection
+}
+
+/** Minimal wire faces for the token-stats reader (sessions domain only). */
+interface StatsConnection {
+  readonly api: {
+    readonly sessions: {
+      list(req: { cursor?: string }): Promise<StatsRpc<{ items: StatsSession[] }>>
+      history(req: { sessionId: string; beforeSeq?: number; maxMessages?: number }): Promise<StatsRpc<{ events: StatsHistoryEntry[]; hasMore: boolean }>>
+    }
+  }
+}
+
+interface StatsRpc<T> {
+  readonly result: { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
+}
+
+interface StatsSession {
+  readonly sessionId: string
+  readonly updatedAt: number
+}
+
+interface StatsHistoryEntry {
+  readonly event: { readonly type: string; readonly seq: number; readonly time: number; readonly data: unknown }
 }
 
 const SLOT = 'conversation.input.model'
@@ -697,6 +721,7 @@ function AdvancedModelSelect({
   directory,
   load,
   select,
+  connection,
 }: ModelSeatProps) {
   const state = useSyncExternalStore(
     (notify) => directory.subscribe(notify),
@@ -827,6 +852,8 @@ function AdvancedModelSelect({
                 </span>
               </div>
             </div>
+            <div className="re-peak-sep" />
+            <TokenStats connection={connection} groups={state.groups} />
             <div className="re-peak-sep" />
             {state.status === 'loading' && state.groups.length === 0 ? (
               <div className="re-model-status">正在加载模型…</div>
@@ -968,6 +995,58 @@ function ChibiThumbSetting() {
 }
 
 // ---------------------------------------------------------------------------
+// Keep-awake switch. The host half owns the Windows execution state; this
+// browser half writes one boolean into the `dsh-model-selector` settings
+// namespace through the settingsScope service, whose mirror folds host-side
+// changes and reloads back in.
+// ---------------------------------------------------------------------------
+interface KeepAwakeSettingsScope {
+  bind(spec: { namespace: string; decode?: (value: unknown) => unknown }): KeepAwakeSettingsHandle
+}
+
+interface KeepAwakeSettingsHandle {
+  getSnapshot(): { status?: string; value?: Record<string, unknown> }
+  subscribe(listener: () => void): () => void
+  set(field: string, value: boolean): Promise<void>
+}
+
+let keepAwakeScope: KeepAwakeSettingsHandle | null = null
+const EMPTY_SETTINGS_SNAPSHOT = { value: undefined }
+
+function KeepAwakeSetting() {
+  const snap = useSyncExternalStore(
+    (notify) => keepAwakeScope?.subscribe(notify) ?? (() => undefined),
+    () => keepAwakeScope?.getSnapshot() ?? EMPTY_SETTINGS_SNAPSHOT,
+  )
+  const enabled = snap.value?.keepAwake === true
+
+  return (
+    <div className="re-setting-row">
+      <div className="re-setting-copy">
+        <div className="re-setting-title">保持唤醒</div>
+        <div className="re-setting-description">DSH 运行期间阻止计算机睡眠/休眠，用于低谷时段定时任务</div>
+      </div>
+      <div className="re-setting-control">
+        <span className="re-setting-state">{enabled ? '启用' : '停用'}</span>
+        <button
+          type="button"
+          role="switch"
+          aria-label="启用保持唤醒"
+          aria-checked={enabled}
+          disabled={keepAwakeScope === null}
+          className={`re-setting-switch${enabled ? ' is-on' : ''}`}
+          onClick={() => {
+            void keepAwakeScope?.set('keepAwake', !enabled)
+          }}
+        >
+          <span className="re-setting-switch-knob" aria-hidden="true" />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Peak / off-peak hint pill for the composer input's left rail.
 // Beijing-time windows (Mon-Fri 9:00-12:00, 14:00-18:00) are "peak"
 // (梁文锋), everything else is "off-peak" (梁文谷). Shows a countdown to the
@@ -1017,9 +1096,874 @@ function formatDur(sec: number): string {
   return days > 0 ? days + '天 ' + hms : hms
 }
 
+// ---------------------------------------------------------------------------
+// Timed send queue: the composer's "定时发送" button (right end of the tool
+// row) parks the current draft into this plugin's own deferral list
+// (localStorage-backed) and clears the textarea. Two item types: "空闲发送"
+// fires 30s after the next idle window begins (Beijing time); "自定义时间"
+// fires every day at the chosen HH:MM. Entries render grouped by type — the
+// idle group shares one sequence, custom entries sequence per HH:MM group —
+// collapsed by default, with per-item countdowns, type switches, immediate
+// send, and removal available at any time.
+// ---------------------------------------------------------------------------
+const DEFER_STORAGE_KEY = 'dsh-model-selector.deferred-queue'
+const DEFER_DELAY_MS = 30000
+
+type DeferMode = 'idle' | 'custom'
+
+/** Custom-time target: send every day at Beijing HH:MM. */
+interface DeferAt {
+  hour: number
+  minute: number
+}
+
+interface DeferredItem {
+  id: string
+  seq: number
+  sessionId: string
+  text: string
+  createdAt: number
+  mode: DeferMode
+  at?: DeferAt
+  error?: string
+}
+
+/** Sequence group of one item: all idle items share "idle"; custom items group by their HH:MM. */
+function deferGroupKey(item: DeferredItem): string {
+  if (item.mode === 'idle') return 'idle'
+  const at = item.at ?? { hour: 9, minute: 0 }
+  return `${String(at.hour).padStart(2, '0')}:${String(at.minute).padStart(2, '0')}`
+}
+
+function deferTimeLabel(item: DeferredItem): string {
+  if (item.mode === 'idle') return '空闲发送'
+  const at = item.at ?? { hour: 9, minute: 0 }
+  return `${String(at.hour).padStart(2, '0')}:${String(at.minute).padStart(2, '0')}`
+}
+
+let deferredItems: DeferredItem[] = readDeferred()
+const deferListeners = new Set<() => void>()
+/** Captured by apply(); the dock/button components read it for sends. */
+let DEFERRED_CONNECTION: StatsConnection | undefined
+
+function readDeferred(): DeferredItem[] {
+  try {
+    const raw = window.localStorage.getItem(DEFER_STORAGE_KEY)
+    if (raw === null) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (Array.isArray(parsed)) {
+      return parsed.filter((entry: unknown) => entry !== null && typeof entry === 'object')
+        .map((entry) => entry as DeferredItem)
+        .filter((entry) => entry.id !== undefined && typeof entry.text === 'string')
+        .map((entry) => (entry.mode === 'custom' ? entry : { ...entry, mode: 'idle' as const }))
+    }
+    return []
+  } catch {
+    return []
+  }
+}
+
+function persistDeferred(): void {
+  try {
+    window.localStorage.setItem(DEFER_STORAGE_KEY, JSON.stringify(deferredItems))
+  } catch {
+    // The live list still keeps working for this page session.
+  }
+}
+
+const deferStore = {
+  getSnapshot: () => deferredItems,
+  subscribe: (listener: () => void) => {
+    deferListeners.add(listener)
+    return () => deferListeners.delete(listener)
+  },
+  enqueue: (sessionId: string, text: string, mode: DeferMode, at?: DeferAt) => {
+    const base: DeferredItem = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      seq: 0,
+      sessionId,
+      text,
+      createdAt: Date.now(),
+      mode,
+      ...(mode === 'custom' ? { at: at ?? { hour: 9, minute: 0 } } : {}),
+    }
+    const group = deferGroupKey(base)
+    const seq = deferredItems
+      .filter((item) => deferGroupKey(item) === group)
+      .reduce((max, item) => Math.max(max, item.seq), 0) + 1
+    deferredItems = [...deferredItems, { ...base, seq }]
+    persistDeferred()
+    deferListeners.forEach((listener) => listener())
+  },
+  remove: (id: string) => {
+    if (!deferredItems.some((item) => item.id === id)) return
+    deferredItems = deferredItems.filter((item) => item.id !== id)
+    persistDeferred()
+    deferListeners.forEach((listener) => listener())
+  },
+  retarget: (id: string, mode: DeferMode, at?: DeferAt) => {
+    const current = deferredItems.find((item) => item.id === id)
+    if (current === undefined) return
+    const next: DeferredItem = {
+      ...current,
+      mode,
+      error: undefined,
+      ...(mode === 'custom' ? { at: at ?? current.at ?? { hour: 9, minute: 0 } } : {}),
+    }
+    const group = deferGroupKey(next)
+    const seq = deferredItems
+      .filter((item) => item.id !== id && deferGroupKey(item) === group)
+      .reduce((max, item) => Math.max(max, item.seq), 0) + 1
+    deferredItems = deferredItems.map((item) => (item.id === id ? { ...next, seq } : item))
+    persistDeferred()
+    deferListeners.forEach((listener) => listener())
+  },
+  setError: (id: string, error: string) => {
+    if (!deferredItems.some((item) => item.id === id)) return
+    deferredItems = deferredItems.map((item) => (item.id === id ? { ...item, error } : item))
+    persistDeferred()
+    deferListeners.forEach((listener) => listener())
+  },
+}
+
+/** Start (epoch ms) of the next idle window after `now`; null when already idle. */
+function nextIdleStartMs(ms: number): number | null {
+  const { day, sec } = beijingParts(ms)
+  if (day < 1 || day > 5) return null
+  const shifted = new Date(ms + BJ_OFFSET)
+  const dayStartMs = Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) - BJ_OFFSET
+  if (sec >= 9 * 3600 && sec < 12 * 3600) return dayStartMs + 12 * 3600 * 1000
+  if (sec >= 14 * 3600 && sec < 18 * 3600) return dayStartMs + 18 * 3600 * 1000
+  return null
+}
+
+/** When an idle-mode item fires: idle now → 30s from now; peak → idle start + 30s. */
+function idleSendAt(ms: number): number {
+  return (nextIdleStartMs(ms) ?? ms) + DEFER_DELAY_MS
+}
+
+/** Next Beijing-day occurrence of a custom HH:MM after `ms` (today if still ahead, else tomorrow). */
+function customNextAt(at: DeferAt, ms: number): number {
+  const shifted = new Date(ms + BJ_OFFSET)
+  const dayStartMs = Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) - BJ_OFFSET
+  const today = dayStartMs + at.hour * 3600000 + at.minute * 60000
+  return today > ms ? today : today + 86400000
+}
+
+/** The exact fire time of one item: idle → idle window + 30s; custom → next HH:MM. */
+function sendAtOf(item: DeferredItem, ms: number): number {
+  if (item.mode === 'idle') return idleSendAt(ms)
+  return customNextAt(item.at ?? { hour: 9, minute: 0 }, ms)
+}
+
+async function sendDeferredItem(
+  connection: StatsConnection | undefined,
+  item: DeferredItem,
+): Promise<boolean> {  if (connection === undefined) return false
+  try {
+    const response = await connection.api.sessions.prompt({
+      sessionId: item.sessionId,
+      mode: 'queue',
+      content: [{ type: 'text', text: item.text }],
+      clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    })
+    const result = response?.result
+    if (result === undefined || !result.ok) {
+      console.error('[dsh-model-selector] deferred send failed', item.id, result?.error)
+      deferStore.setError(item.id, `${result?.error.code ?? 'unknown'}: ${result?.error.message ?? '发送失败'}`)
+      return false
+    }
+    deferStore.remove(item.id)
+    return true
+  } catch (cause) {
+    console.error('[dsh-model-selector] deferred send threw', item.id, cause)
+    deferStore.setError(item.id, cause instanceof Error ? cause.message : String(cause))
+    return false
+  }
+}
+
+function fmtCountdown(ms: number): string {
+  const sec = Math.max(0, Math.ceil(ms / 1000))
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const days = Math.floor(sec / 86400)
+  const h = Math.floor((sec % 86400) / 3600)
+  const m = Math.floor((sec % 3600) / 60)
+  const s = sec % 60
+  const hms = pad(h) + ':' + pad(m) + ':' + pad(s)
+  return days > 0 ? `${days}天 ${hms}` : hms
+}
+
+interface InputZoneLike {
+  readonly session?: { readonly queue?: readonly unknown[] }
+  readonly input?: { readonly draft: string }
+  readonly sessionId?: string
+  readonly useInput?: () => { readonly draft: string }
+  readonly inputActions?: { readonly setDraft: (text: string) => void }
+}
+
+function TimerSendButton({ input, sessionId, inputActions }: InputZoneLike) {
+  const draft = input?.draft ?? ''
+  const canQueue = draft.trim() !== '' && inputActions !== undefined && sessionId !== undefined
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [picking, setPicking] = useState(false)
+  const [timeDraft, setTimeDraft] = useState('09:00')
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const closeOutside = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', closeOutside)
+    return () => document.removeEventListener('mousedown', closeOutside)
+  }, [menuOpen])
+
+  if (!canQueue) return null
+
+  const close = () => {
+    setMenuOpen(false)
+    setPicking(false)
+  }
+
+  const commit = (mode: DeferMode, at?: DeferAt) => {
+    if (!canQueue) return
+    inputActions?.setDraft('')
+    deferStore.enqueue(sessionId!, draft, mode, at)
+    close()
+  }
+
+  const submitCustom = () => {
+    const parts = timeDraft.split(':')
+    const hour = Number(parts[0])
+    const minute = Number(parts[1] ?? 0)
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) return
+    commit('custom', { hour: Math.max(0, Math.min(23, hour)), minute: Math.max(0, Math.min(59, minute)) })
+  }
+
+  return (
+    <div ref={rootRef} className="re-timer-root">
+      <button
+        type="button"
+        className="re-timer-btn"
+        title="定时发送"
+        aria-label="定时发送"
+        aria-expanded={menuOpen}
+        onClick={() => {
+          setMenuOpen(!menuOpen)
+          setPicking(false)
+        }}
+      >
+        <span className="re-timer-btn-icon" aria-hidden="true" />
+        <span className="re-timer-btn-text">定时发送</span>
+      </button>
+      {menuOpen ? (
+        <div className="re-timer-menu">
+          {!picking ? (
+            <>
+              <button
+                type="button"
+                className="re-timer-option"
+                onClick={() => commit('idle')}
+              >
+                <span className="re-timer-option-name">空闲发送</span>
+                <span className="re-timer-option-desc">等到下一个空闲时间自动发送</span>
+              </button>
+              <button
+                type="button"
+                className="re-timer-option"
+                onClick={() => setPicking(true)}
+              >
+                <span className="re-timer-option-name">自定义时间发送</span>
+                <span className="re-timer-option-desc">输入一个时间，每天到点发送</span>
+              </button>
+            </>
+          ) : (
+            <div className="re-timer-picker">
+              <div className="re-timer-picker-row">
+                <input
+                  type="time"
+                  className="re-timer-time"
+                  value={timeDraft}
+                  onChange={(event) => setTimeDraft(event.currentTarget.value)}
+                  autoFocus
+                />
+                <button type="button" className="re-timer-picker-ok" onClick={submitCustom}>确定</button>
+                <button type="button" className="re-timer-picker-cancel" onClick={() => setPicking(false)}>返回</button>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function DeferredPanel({ sessionId }: InputZoneLike) {
+  const items = useSyncExternalStore(deferStore.subscribe, deferStore.getSnapshot)
+  const [now, setNow] = useState(Date.now())
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const [editing, setEditing] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  useEffect(() => {
+    if (DEFERRED_CONNECTION === undefined) return
+    for (const item of items) {
+      if (sendAtOf(item, now) > now) continue
+      void sendDeferredItem(DEFERRED_CONNECTION, item)
+    }
+  }, [now, items])
+
+  const own = items.filter((item) => item.sessionId === sessionId).sort((a, b) => a.createdAt - b.createdAt)
+  const idleRows = own.filter((item) => item.mode === 'idle').sort((a, b) => a.seq - b.seq)
+  const customRows = own.filter((item) => item.mode === 'custom').sort((a, b) => a.seq - b.seq)
+  const customGroups: DeferredItem[][] = []
+  for (const row of customRows.sort((a, b) => deferGroupKey(a).localeCompare(deferGroupKey(b)))) {
+    const group = customGroups.find((entries) => deferGroupKey(entries[0]) === deferGroupKey(row))
+    if (group === undefined) customGroups.push([row])
+    else group.push(row)
+  }
+  if (own.length === 0 || DEFERRED_CONNECTION === undefined) return null
+
+  const toggle = (id: string) => {
+    setExpanded((current) => ({ ...current, [id]: !current[id] }))
+  }
+  const nextIdle = nextIdleStartMs(now)
+  const idleGroupLabel = nextIdle === null ? '当前空闲时段' : `距空闲 ${fmtCountdown(nextIdle - now)}`
+
+  const renderRow = (item: DeferredItem) => {
+    const isIdle = item.mode === 'idle'
+    const sendAt = sendAtOf(item, now)
+    const open = expanded[item.id] === true
+    const editingDraft = editing[item.id]
+    const isEditing = editingDraft !== undefined
+    const label = deferTimeLabel(item)
+    return (
+      <div key={item.id} className={`re-defer-row${open ? ' is-open' : ''}`}>
+        <button
+          type="button"
+          className="re-defer-toggle"
+          onClick={() => toggle(item.id)}
+          aria-expanded={open}
+          title={open ? '折叠内容' : '展开内容'}
+        >
+          <span className="re-defer-chevron" aria-hidden="true" />
+          <span className="re-defer-seq">#{item.seq}</span>
+          <span className={`re-defer-mode${isIdle ? ' is-idle' : ' is-custom'}`}>{label}</span>
+          <span className="re-defer-summary">{open ? '' : item.text}</span>
+        </button>
+        {open ? <div className="re-defer-full">{item.text}</div> : null}
+        <span className="re-defer-actions">
+          {isIdle ? (
+            <>
+              <span className="re-defer-countdown" title={`预计 ${new Date(sendAt).toLocaleTimeString()} 发送`}>
+                {fmtCountdown(sendAt - now)}
+              </span>
+              <button
+                type="button"
+                className="re-defer-toidle"
+                title="改为自定义时间发送"
+                onClick={() => {
+                  setEditing((current) => ({ ...current, [item.id]: '09:00' }))
+                }}
+              >
+                转自定义
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="re-defer-countdown" title={`预计 ${new Date(sendAt).toLocaleTimeString()} 发送`}>
+                {fmtCountdown(sendAt - now)}
+              </span>
+              <button
+                type="button"
+                className="re-defer-cancel"
+                title="改为空闲发送"
+                onClick={() => deferStore.retarget(item.id, 'idle')}
+              >
+                转空闲
+              </button>
+              <button
+                type="button"
+                className="re-defer-toidle"
+                title="修改发送时间"
+                onClick={() => {
+                  const at = item.at ?? { hour: 9, minute: 0 }
+                  setEditing((current) => ({ ...current, [item.id]: `${String(at.hour).padStart(2, '0')}:${String(at.minute).padStart(2, '0')}` }))
+                }}
+              >
+                改时间
+              </button>
+            </>
+          )}
+          <button
+            type="button"
+            className="re-defer-send"
+            onClick={() => void sendDeferredItem(DEFERRED_CONNECTION, item)}
+          >
+            立即发送
+          </button>
+          <button type="button" className="re-defer-remove" title="删除" onClick={() => deferStore.remove(item.id)}>
+            ✕
+          </button>
+        </span>
+        {isEditing ? (
+          <span className="re-defer-edit">
+            <input
+              type="time"
+              className="re-defer-time"
+              value={editingDraft}
+              onChange={(event) => setEditing((current) => ({ ...current, [item.id]: event.currentTarget.value }))}
+              autoFocus
+            />
+            <button
+              type="button"
+              className="re-defer-edit-ok"
+              onClick={() => {
+                const parts = editingDraft.split(':')
+                const hour = Number(parts[0])
+                const minute = Number(parts[1] ?? 0)
+                if (Number.isFinite(hour) && Number.isFinite(minute)) {
+                  deferStore.retarget(item.id, 'custom', {
+                    hour: Math.max(0, Math.min(23, hour)),
+                    minute: Math.max(0, Math.min(59, minute)),
+                  })
+                }
+                setEditing((current) => {
+                  const next = { ...current }
+                  delete next[item.id]
+                  return next
+                })
+              }}
+            >
+              确定
+            </button>
+            <button
+              type="button"
+              className="re-defer-edit-cancel"
+              onClick={() => {
+                setEditing((current) => {
+                  const next = { ...current }
+                  delete next[item.id]
+                  return next
+                })
+              }}
+            >
+              取消
+            </button>
+          </span>
+        ) : null}
+        {item.error === undefined ? null : <div className="re-defer-error">{item.error}</div>}
+      </div>
+    )
+  }
+
+  return (
+    <div className="re-defer-dock">
+      <div className="re-defer-panel">
+        <div className="re-defer-head">
+          <span className="re-defer-lead" aria-hidden="true">⏳</span>
+          <span className="re-defer-title">定时发送 · {own.length} 条</span>
+          <span className="re-defer-hint">空闲发送 = 北京时间空闲时段（开始 30 秒后自动发）；自定义 = 每天到点发送；请保持页面打开</span>
+        </div>
+        <div className="re-defer-list">
+        {idleRows.length > 0 ? (
+          <div className="re-defer-group">
+            <div className="re-defer-group-head">
+              <span className="re-defer-group-dot is-idle" aria-hidden="true" />
+              <span className="re-defer-group-title">空闲发送 · {idleRows.length} 条</span>
+              <span className="re-defer-group-count">{idleGroupLabel}</span>
+            </div>
+            {idleRows.map(renderRow)}
+          </div>
+        ) : null}
+        {customRows.length > 0 ? (
+          <div className="re-defer-group">
+            <div className="re-defer-group-head">
+              <span className="re-defer-group-dot is-custom" aria-hidden="true" />
+              <span className="re-defer-group-title">自定义时间 · {customRows.length} 条</span>
+            </div>
+            {customGroups.map((group) => (
+              <div key={deferGroupKey(group[0])} className="re-defer-subgroup">
+                <div className="re-defer-subhead">{deferGroupKey(group[0])} · {group.length} 条</div>
+                {group.map(renderRow)}
+              </div>
+            ))}
+          </div>
+        ) : null}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Today's token usage summary (region 2 of the model popover).
+//
+// Reads provider-reported usage from the durable session logs through the
+// browser's ordinary sessions API (no Host-side plugin needed):
+//   - `sessions.list()` → sessions active today;
+//   - `sessions.history()` → raw events; each `assistant/message` carries the
+//     step's `usage` (uncached input + cache reads/writes + output) and its own
+//     `time`; the model comes from the latest preceding `request/header`.
+// Peak/off-peak buckets reuse `phase()` (Beijing windows). The snapshot is
+// cached in localStorage so the popover opens instantly and refreshes on a
+// light interval while it stays open.
+// ---------------------------------------------------------------------------
+const STATS_CACHE_KEY = 'dsh-model-selector.token-stats'
+const STATS_REFRESH_MS = 180000
+const STATS_MAX_PAGES = 3
+const STATS_PAGE_MESSAGES = 100
+
+/** One token total bucket: peak-time, idle-time (Beijing), and the sum. */
+interface TokenBucket {
+  peak: number
+  idle: number
+  total: number
+}
+
+/** Today's totals keyed by `${provider}/${model}` ("(未知)" when unrecorded). */
+interface DayStats {
+  date: string
+  fetchedAt: number
+  models: Record<string, TokenBucket>
+  /** Previous Beijing calendar day; carried so a fresh midnight does not read as "no data". */
+  prev: Record<string, TokenBucket>
+}
+
+function beijingDayStart(ms: number): number {
+  const shifted = new Date(ms + BJ_OFFSET)
+  const start = Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) - BJ_OFFSET
+  return start
+}
+
+function beijingDateKey(ms: number): string {
+  const shifted = new Date(ms + BJ_OFFSET)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${shifted.getUTCFullYear()}-${pad(shifted.getUTCMonth() + 1)}-${pad(shifted.getUTCDate())}`
+}
+
+/**
+ * Adaptive Chinese-unit token formatter: 千 / 万 / 十万 / 百万 / 千万 / 亿.
+ * Below one thousand the integer is printed as-is. At 亿 scale the decimal
+ * part only appears when it is at least 0.01亿 (100万), per spec.
+ */
+function fmtTokens(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0'
+  if (n < 1000) return String(Math.round(n))
+  const units: ReadonlyArray<{ value: number; name: string; decimals: number }> = [
+    { value: 1e8, name: '亿', decimals: 2 },
+    { value: 1e7, name: '千万', decimals: 1 },
+    { value: 1e6, name: '百万', decimals: 1 },
+    { value: 1e5, name: '十万', decimals: 1 },
+    { value: 1e4, name: '万', decimals: 1 },
+    { value: 1e3, name: '千', decimals: 1 },
+  ]
+  let unit = units[units.length - 1]
+  for (const candidate of units) {
+    if (n >= candidate.value) {
+      unit = candidate
+      break
+    }
+  }
+  const raw = n / unit.value
+  let text: string
+  if (unit.name === '亿' && raw % 1 > 0 && raw % 1 < 0.01) {
+    text = String(Math.floor(raw))
+  } else {
+    text = raw.toFixed(unit.decimals).replace(/\.?0+$/, '')
+  }
+  return `${text}${unit.name}`
+}
+
+function emptyBucket(): TokenBucket {
+  return { peak: 0, idle: 0, total: 0 }
+}
+
+function bucketOf(models: Record<string, TokenBucket>, key: string): TokenBucket {
+  return models[key] ?? (models[key] = emptyBucket())
+}
+
+function usageTokensOf(usage: Record<string, unknown>): number {
+  const pick = (key: string) => {
+    const value = usage[key]
+    return typeof value === 'number' && value > 0 ? value : 0
+  }
+  return pick('inputTokens') + pick('cacheReadTokens') + pick('cacheWriteTokens') + pick('outputTokens')
+}
+
+/** Header state shared across one session's history pages (headers are sparse). */
+interface EventWalk {
+  header: { provider: string; model: string } | undefined
+}
+
+function aggregateEvents(
+  events: readonly StatsHistoryEntry[],
+  models: Record<string, TokenBucket>,
+  prev: Record<string, TokenBucket>,
+  dayStart: number,
+  prevDayStart: number,
+  walk: EventWalk,
+): void {
+  for (const entry of events) {
+    const event = entry.event
+    const data = event.data as Record<string, unknown> | null
+    if (event.type === 'request/header' && data !== null && data.header !== undefined) {
+      const headerData = data.header as { config?: Record<string, unknown> }
+      const config = headerData.config
+      if (config !== undefined && typeof config.provider === 'string' && typeof config.model === 'string') {
+        walk.header = { provider: config.provider, model: config.model }
+      }
+    } else if (event.type === 'assistant/message' && data !== null && data.usage !== undefined) {
+      if (event.time < prevDayStart) continue
+      const tokens = usageTokensOf(data.usage as Record<string, unknown>)
+      if (tokens <= 0) continue
+      // The assistant message itself carries the exact model route, so
+      // attribution works even when the header event sits outside the pages
+      // we walked (huge logs) or on an earlier page.
+      const message = data.message as { source?: { provider?: unknown; model?: unknown } } | undefined
+      const source = message?.source
+      const provider = typeof source?.provider === 'string' ? source.provider : undefined
+      const model = typeof source?.model === 'string' ? source.model : undefined
+      const key = provider !== undefined && model !== undefined
+        ? `${provider}/${model}`
+        : walk.header !== undefined
+          ? `${walk.header.provider}/${walk.header.model}`
+          : '(未知)'
+      const into = event.time >= dayStart ? models : prev
+      const bucket = bucketOf(into, key)
+      if (phase(event.time).peak) bucket.peak += tokens
+      else bucket.idle += tokens
+      bucket.total += tokens
+    }
+  }
+}
+
+async function collectSessionStats(
+  connection: StatsConnection,
+  sessionId: string,
+  dayStart: number,
+  prevDayStart: number,
+  models: Record<string, TokenBucket>,
+  prev: Record<string, TokenBucket>,
+): Promise<void> {
+  const walk: EventWalk = { header: undefined }
+  let beforeSeq: number | undefined
+  for (let page = 0; page < STATS_MAX_PAGES; page += 1) {
+    const response = await connection.api.sessions.history({
+      sessionId,
+      maxMessages: STATS_PAGE_MESSAGES,
+      ...(beforeSeq === undefined ? {} : { beforeSeq }),
+    })
+    const result = response?.result
+    if (result === undefined || !result.ok) return
+    const events = result.value.events
+    if (events.length === 0) return
+    aggregateEvents(events, models, prev, dayStart, prevDayStart, walk)
+    let minTime = Infinity
+    let minSeq = Infinity
+    for (const entry of events) {
+      if (entry.event.time < minTime) minTime = entry.event.time
+      if (entry.event.seq < minSeq) minSeq = entry.event.seq
+    }
+    if (minTime < prevDayStart || !result.value.hasMore) return
+    beforeSeq = minSeq
+  }
+}
+
+interface StatsProgress {
+  models: Record<string, TokenBucket>
+  prev: Record<string, TokenBucket>
+  scanned: number
+  failed: number
+}
+
+async function fetchTodayStats(
+  connection: StatsConnection | undefined,
+): Promise<StatsProgress | null> {
+  if (connection === undefined) return null
+  const now = Date.now()
+  const dayStart = beijingDayStart(now)
+  const prevDayStart = dayStart - 86400000
+  const models: Record<string, TokenBucket> = {}
+  const prev: Record<string, TokenBucket> = {}
+  let scanned = 0
+  let failed = 0
+  const response = await connection.api.sessions.list({})
+  const result = response?.result
+  if (result === undefined || !result.ok) return null
+  for (const item of result.value.items) {
+    if (item.updatedAt < prevDayStart) continue
+    scanned += 1
+    try {
+      await collectSessionStats(connection, item.sessionId, dayStart, prevDayStart, models, prev)
+    } catch (cause) {
+      failed += 1
+      console.error('[dsh-model-selector] token stats: session read failed', item.sessionId, cause)
+    }
+  }
+  return { models, prev, scanned, failed }
+}
+
+function readCachedStats(): DayStats | null {
+  try {
+    const raw = window.localStorage.getItem(STATS_CACHE_KEY)
+    if (raw === null) return null
+    const parsed: unknown = JSON.parse(raw)
+    if (parsed === null || typeof parsed !== 'object') return null
+    const stats = parsed as DayStats
+    if (stats.date !== beijingDateKey(Date.now()) || stats.models === undefined) return null
+    if (stats.prev === undefined) stats.prev = {}
+    return stats
+  } catch {
+    return null
+  }
+}
+
+function writeCachedStats(stats: DayStats): void {
+  try {
+    window.localStorage.setItem(STATS_CACHE_KEY, JSON.stringify(stats))
+  } catch {
+    // Cache is optional; the live fetch still feeds the UI this run.
+  }
+}
+
+function TokenStats({ connection, groups }: { connection?: StatsConnection; groups: ReadonlyArray<{ id: string; models: ReadonlyArray<{ id: string; name: string }> }> }) {
+  const [expanded, setExpanded] = useState(false)
+  const [stats, setStats] = useState<DayStats | null>(readCachedStats)
+  const [updating, setUpdating] = useState(false)
+  const [result, setResult] = useState<StatsProgress | null>(null)
+  const [fatal, setFatal] = useState<string | null>(null)
+  const aliasMap = useSyncExternalStore(aliasStore.subscribe, aliasStore.getSnapshot)
+
+  useEffect(() => {
+    if (connection === undefined) return
+    let disposed = false
+    const refresh = async () => {
+      setUpdating(true)
+      setFatal(null)
+      try {
+        const outcome = await fetchTodayStats(connection)
+        if (disposed) return
+        if (outcome === null) {
+          setFatal('统计数据加载失败')
+          return
+        }
+        setResult(outcome)
+        const next: DayStats = { date: beijingDateKey(Date.now()), fetchedAt: Date.now(), models: outcome.models, prev: outcome.prev }
+        setStats(next)
+        writeCachedStats(next)
+      } catch (cause) {
+        if (disposed) return
+        console.error('[dsh-model-selector] token stats: refresh failed', cause)
+        setFatal(cause instanceof Error ? cause.message : String(cause))
+      } finally {
+        if (!disposed) setUpdating(false)
+      }
+    }
+    void refresh()
+    const id = window.setInterval(() => void refresh(), STATS_REFRESH_MS)
+    return () => {
+      disposed = true
+      window.clearInterval(id)
+    }
+  }, [connection])
+
+  if (connection === undefined) return null
+
+  const models = stats?.models ?? {}
+  const prev = stats?.prev ?? {}
+  const keys = Object.keys(models).sort((a, b) => models[b].total - models[a].total)
+  let peakTotal = 0
+  let idleTotal = 0
+  let totalTotal = 0
+  let prevTotal = 0
+  for (const key of keys) {
+    peakTotal += models[key].peak
+    idleTotal += models[key].idle
+    totalTotal += models[key].total
+  }
+  for (const key of Object.keys(prev)) prevTotal += prev[key].total
+  const modelLabelOf = (key: string) => {
+    const aliased = aliasMap[key]
+    if (aliased !== undefined) return aliased
+    const [provider, model] = key.split('/')
+    const group = groups.find((candidate) => candidate.id === provider)
+    const entry = group?.models.find((candidate) => candidate.id === model)
+    return entry?.name ?? model ?? key
+  }
+
+  return (
+    <div className="re-stats">
+      <button
+        type="button"
+        className="re-stats-row"
+        aria-expanded={expanded}
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span className="re-stats-title">今日 Token 总用量</span>
+        <span className={`re-stats-status${updating ? ' is-updating' : ''}`}>
+          {updating ? '更新中…' : fatal !== null ? '加载失败' : '已更新'}
+        </span>
+        <span className="re-stats-value">{fmtTokens(totalTotal)}</span>
+        <span className={`re-stats-chevron${expanded ? ' is-open' : ''}`} aria-hidden="true" />
+      </button>
+      {expanded ? (
+        <div className="re-stats-body">
+          {fatal !== null ? (
+            <div className="re-stats-empty">统计数据加载失败</div>
+          ) : keys.length === 0 ? (
+            <div className="re-stats-empty">
+              今日暂无消耗
+              {prevTotal > 0 ? `（昨日全天 ${fmtTokens(prevTotal)}）` : ''}
+            </div>
+          ) : (
+            <div className="re-stats-detail">
+              <table className="re-stats-table">
+                <thead>
+                  <tr>
+                    <th className="re-stats-th-model">模型</th>
+                    <th className="re-stats-th-peak">高峰</th>
+                    <th className="re-stats-th-idle">低谷</th>
+                    <th className="re-stats-th-total">合计</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {keys.map((key) => (
+                    <tr key={key}>
+                      <td className="re-stats-td-model" title={key}>{modelLabelOf(key)}</td>
+                      <td className="re-stats-td-num">{fmtTokens(models[key].peak)}</td>
+                      <td className="re-stats-td-num">{fmtTokens(models[key].idle)}</td>
+                      <td className="re-stats-td-num is-total">{fmtTokens(models[key].total)}</td>
+                    </tr>
+                  ))}
+                  <tr className="re-stats-row-total">
+                    <td className="re-stats-td-model">合计</td>
+                    <td className="re-stats-td-num">{fmtTokens(peakTotal)}</td>
+                    <td className="re-stats-td-num">{fmtTokens(idleTotal)}</td>
+                    <td className="re-stats-td-num is-total">{fmtTokens(totalTotal)}</td>
+                  </tr>
+                </tbody>
+              </table>
+              {result !== null && result.failed > 0 ? (
+                <div className="re-stats-note">部分会话读取失败（{result.failed}/{result.scanned}），详情见浏览器控制台</div>
+              ) : null}
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 export function apply(ctx: ClientContext) {
   const modelDirectories = ctx.get('modelDirectories') as ModelDirectoryResolver | undefined
   if (modelDirectories === undefined) return
+  const connection = ctx.get('connection') as StatsConnection | undefined
+  DEFERRED_CONNECTION = connection
 
   ctx.effect(() => {
     const style = document.createElement('style')
@@ -1055,6 +1999,35 @@ export function apply(ctx: ClientContext) {
     ),
   )
 
+  const settingsScope = ctx.get('settingsScope') as KeepAwakeSettingsScope | undefined
+  if (settingsScope !== undefined) {
+    keepAwakeScope = settingsScope.bind({
+      namespace: 'dsh-model-selector',
+      decode: (value: unknown) => (value !== null && typeof value === 'object' && !Array.isArray(value) ? value : undefined),
+    })
+  }
+
+  ctx.slots.inject(SETTINGS_SLOT, () =>
+    ctx.slots.register(
+      { name: SETTINGS_SLOT, id: 'dsh-model-selector-keep-awake', order: 17 },
+      KeepAwakeSetting,
+    ),
+  )
+
+  ctx.slots.inject('conversation.input.right', () =>
+    ctx.slots.register(
+      { name: 'conversation.input.right', id: 'dsh-model-selector-idle-send', order: 30 },
+      TimerSendButton,
+    ),
+  )
+
+  ctx.slots.inject('conversation.input.dock', () =>
+    ctx.slots.register(
+      { name: 'conversation.input.dock', id: 'dsh-model-selector-deferred', order: 21 },
+      DeferredPanel,
+    ),
+  )
+
   ctx.slots.inject(SLOT, () => {
     let disposeModelSeat: (() => void) | undefined
     const syncModelSeat = () => {
@@ -1076,6 +2049,7 @@ export function apply(ctx: ClientContext) {
               directory: controller.store,
               load: () => controller.load().then(() => undefined, () => undefined),
               select: (selection: ModelSelection) => controller.select(selection).then(() => true, () => false),
+              connection,
             }
           },
         },
