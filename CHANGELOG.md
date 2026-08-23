@@ -1,0 +1,30 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+## [0.1.0] - 2026-08-23
+
+### Added
+- Forked from `dsh-reasoning-effort` v0.4.0 (MIT, © HanaAyane) and rebranded as `dsh-better-model-selector` (Apache-2.0).
+- **5-tier Huang/Liang reasoning slider**: 小难梁(off) / 梁子(low) / 梁文锋(high) / 梁圣(max) / 梁神(placeholder, not selectable), with the original tier names shown as gray notes below each tier.
+- **Custom model aliases**: per-model short names editable inline in the model list, persisted in localStorage.
+- **Peak/off-peak pricing hint**: Beijing-time phase (Mon–Fri 9–12 & 14–18 peak) shown as a colored dot on the model trigger; the popup panel shows the phase and a live countdown to the next phase (green when heading to off-peak, yellow when heading to peak).
+- **Unified popup**: phase panel on top, one-level model list + embedded reasoning slider below; the old separate rail pill was removed and merged.
+- Plain/neon "radiance" visual theme, label row above the slider, inset margins for edge breathing room.
+
+### Changed
+- Model menu is now a single-level list: click a model to select it; the slider appears under the selected model.
+- The slider tracks 5 visual slots while the last one (梁神) stays unselectable.
+- Package metadata: new name, author (DeepVite), Apache-2.0 license, GitHub repository, v0.1.0.
+
+### Removed
+- The separate `conversation.input.left` peak pill component (logic merged into the model selector).
+- The `prepack` build step (runtime bundle `lib/client/index.js` is shipped pre-built).
+
+## [0.4.0] - 2026-08-15 (upstream)
+
+### Added
+
+- Optional eight-frame chibi runner thumb, disabled by default.
+
+*(Earlier history belongs to upstream `dsh-reasoning-effort`; see the original repository.)*

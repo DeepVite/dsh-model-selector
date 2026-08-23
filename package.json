@@ -1,0 +1,88 @@
+{
+  "name": "dsh-better-model-selector",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness model selector upgrade: one-level model & reasoning-effort picker with 5 Liang tiers, custom model aliases, and peak/off-peak price countdown.",
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "reasoning-effort",
+    "thinking",
+    "model-selector",
+    "slider",
+    "ui",
+    "cordis"
+  ],
+  "author": "DeepVite <ibronfree@gmail.com>",
+  "homepage": "https://github.com/DeepVite/dsh-better-model-selector#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DeepVite/dsh-better-model-selector.git"
+  },
+  "bugs": {
+    "url": "https://github.com/DeepVite/dsh-better-model-selector/issues"
+  },
+  "engines": {
+    "node": ">=22.19"
+  },
+  "type": "module",
+  "packageManager": "pnpm@11.7.0",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/client/index.d.ts",
+      "default": "./lib/client/index.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "src",
+    "assets/chibi-runner-strip.png",
+    "design",
+    "cordis.patch.yml",
+    "README.md",
+    "README.en.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "bump": "dsh plugin --profile web update dsh-better-model-selector"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-model-selection",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-api-remotes"
+      ],
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "react": "^18.2.0",
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-connection": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-conversation": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-model-selection": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-settings": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-api-remotes": "^0.1.0-rc.6"
+  },
+  "license": "Apache-2.0"
+}
