@@ -1,10 +1,19 @@
 # dsh-model-selector
 
 > Liang Valley plugin · Better model selector for DeepSeek Harness
+>
+> 梁文谷插件 · DeepSeek Harness 模型选择器升级
 
-An enhanced model-selector and reasoning-effort plugin for DSH (DeepSeek Harness): model picking, thinking tiers, and peak/off-peak pricing hints unified into one button. One-command install, open and go.
+**[中文](README.md)**  |  English
+
+---
+
+**An enhanced model-selector and reasoning-effort plugin for DSH (DeepSeek Harness): model picking, thinking tiers, and peak/off-peak pricing hints unified into one button. One-command install, open and go.**
+
+**DSH（DeepSeek Harness）模型选择与推理档位插件的增强版：把模型选择、思考档位、时段计价提示整合到一个按钮里，一键安装、点开即用。**
 
 **Derived from [HanaAyane/dsh-reasoning-effort](https://github.com/HanaAyane/dsh-reasoning-effort) (MIT), released under Apache-2.0.**
+**基于 [HanaAyane/dsh-reasoning-effort](https://github.com/HanaAyane/dsh-reasoning-effort) (MIT) 二次开发，以 Apache-2.0 协议发布。**
 
 ---
 
