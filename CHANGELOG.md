@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.3.0] - 2026-08-23
+
+### Added
+- **Plugin master toggle**: a new plugin card (settings → plugins) controlling the whole enhanced UI (model picker / scheduled sending / pending queue / token stats); when off, DSH's native model selector is restored and all enhanced surfaces are hidden. Old "slider toggle" semantics migrated to an independent slider switch.
+- **Settings panel** (`re-pane-settings`): in-menu gear panel with per-option switches, including **keep-awake (WakeLock/compute sleep prevention)** used for off-peak scheduled tasks.
+- Pending queue / scheduled sending groundwork for off-peak (低谷) execution.
+
 ## [0.2.0] - 2026-08-23
 
 ### Added

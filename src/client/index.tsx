@@ -107,6 +107,88 @@ const enabledStore = {
   },
 }
 
+// ---------------------------------------------------------------------------
+// 插件总开关（新语义）：控制整个插件的功能 UI（模型浮窗 / 定时发送 /
+// 待发队列 / Token 统计）。与旧的 enabledStore（原"推理强度滑块"开关）
+// 解耦：旧值迁移为滑块开关，总开关默认开启；设置 → 插件 的插件卡永远
+// 保留，因此总开关关闭也不会失去配置入口。
+// ---------------------------------------------------------------------------
+const PLUGIN_ENABLED_STORAGE_KEY = 'dsh-model-selector.plugin-enabled'
+
+function readPluginEnabled(): boolean {
+  try {
+    return window.localStorage.getItem(PLUGIN_ENABLED_STORAGE_KEY) !== 'false'
+  } catch {
+    return true
+  }
+}
+
+let pluginEnabled = readPluginEnabled()
+const pluginEnabledListeners = new Set<() => void>()
+
+const pluginStore = {
+  getSnapshot: () => pluginEnabled,
+  subscribe: (listener: () => void) => {
+    pluginEnabledListeners.add(listener)
+    return () => pluginEnabledListeners.delete(listener)
+  },
+  set: (enabled: boolean, persist = true) => {
+    if (pluginEnabled === enabled) return
+    pluginEnabled = enabled
+    if (persist) {
+      try {
+        window.localStorage.setItem(PLUGIN_ENABLED_STORAGE_KEY, String(enabled))
+      } catch {
+        // The current page still follows the choice when storage is unavailable.
+      }
+    }
+    pluginEnabledListeners.forEach((listener) => listener())
+  },
+}
+
+// ---------------------------------------------------------------------------
+// 推理强度滑块开关（由旧 enabledStore 语义迁移而来）：只控制模型浮窗内
+// 滑块的显隐。默认值继承旧 key（dsh-model-selector.enabled 系列）。
+// ---------------------------------------------------------------------------
+const SLIDER_ENABLED_STORAGE_KEY = 'dsh-model-selector.slider-enabled'
+
+function readSliderEnabled(): boolean {
+  try {
+    const current = window.localStorage.getItem(SLIDER_ENABLED_STORAGE_KEY)
+    if (current !== null) return current !== 'false'
+    const legacy = window.localStorage.getItem(ENABLED_STORAGE_KEY)
+      ?? window.localStorage.getItem(OLD_ENABLED_STORAGE_KEY)
+      ?? window.localStorage.getItem(OLDER_ENABLED_STORAGE_KEY)
+      ?? window.localStorage.getItem(LEGACY_ENABLED_STORAGE_KEY)
+    return legacy === null ? true : legacy !== 'false'
+  } catch {
+    return true
+  }
+}
+
+let sliderEnabled = readSliderEnabled()
+const sliderEnabledListeners = new Set<() => void>()
+
+const sliderStore = {
+  getSnapshot: () => sliderEnabled,
+  subscribe: (listener: () => void) => {
+    sliderEnabledListeners.add(listener)
+    return () => sliderEnabledListeners.delete(listener)
+  },
+  set: (enabled: boolean, persist = true) => {
+    if (sliderEnabled === enabled) return
+    sliderEnabled = enabled
+    if (persist) {
+      try {
+        window.localStorage.setItem(SLIDER_ENABLED_STORAGE_KEY, String(enabled))
+      } catch {
+        // The current page still follows the choice when storage is unavailable.
+      }
+    }
+    sliderEnabledListeners.forEach((listener) => listener())
+  },
+}
+
 function readChibiThumbPreference(): boolean {
   try {
     return (window.localStorage.getItem(CHIBI_THUMB_STORAGE_KEY) ?? window.localStorage.getItem(OLD_CHIBI_THUMB_STORAGE_KEY) ?? window.localStorage.getItem(OLDER_CHIBI_THUMB_STORAGE_KEY)) === 'true'
@@ -728,12 +810,14 @@ function AdvancedModelSelect({
     () => directory.getSnapshot(),
   )
   const [open, setOpen] = useState(false)
+  const [paneMode, setPaneMode] = useState<'main' | 'settings'>('main')
   const [now, setNow] = useState(Date.now())
   const [editing, setEditing] = useState<string | null>(null)
   const [aliasDraft, setAliasDraft] = useState('')
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const aliasMap = useSyncExternalStore(aliasStore.subscribe, aliasStore.getSnapshot)
+  const sliderEnabled = useSyncExternalStore(sliderStore.subscribe, sliderStore.getSnapshot)
   const choice = currentModel(state)
   const levels = sliderLevels(state)
   const effortName = levels[effectiveEffortIndex(levels, state)]?.name ?? '默认'
@@ -776,6 +860,7 @@ function AdvancedModelSelect({
   const close = (restoreFocus = false) => {
     setOpen(false)
     setEditing(null)
+    setPaneMode('main')
     if (restoreFocus) queueMicrotask(() => triggerRef.current?.focus())
   }
 
@@ -837,71 +922,84 @@ function AdvancedModelSelect({
       </button>
 
       {open ? (
-        <div className="re-model-menu" role="menu" aria-label="模型与推理强度" aria-busy={busy}>
+        <div className="re-model-menu" role={paneMode === 'settings' ? 'dialog' : 'menu'} aria-label={paneMode === 'settings' ? '插件设置' : '模型与推理强度'} aria-busy={busy}>
           <div className="re-model-pane">
-            <div className="re-peak-panel">
-              <div className="re-peak-row">
-                <span className="re-peak-dot" style={{ background: peakAccent }} aria-hidden="true" />
-                <span className="re-peak-state" style={{ color: peakAccent }}>{peakStateName}</span>
-                <span className="re-peak-desc">{peak.peak ? '高峰时段 · 全价' : '空闲时段 · 半价'}</span>
-              </div>
-              <div className="re-peak-countdown">
-                距 {peakTargetName}（{peakTargetDesc}）还有：
-                <span className="re-peak-time" style={{ color: peakTargetAccent }}>
-                  {formatDur(peak.secondsToTarget)}
-                </span>
-              </div>
-            </div>
-            <div className="re-peak-sep" />
-            <TokenStats connection={connection} groups={state.groups} />
-            <div className="re-peak-sep" />
-            {state.status === 'loading' && state.groups.length === 0 ? (
-              <div className="re-model-status">正在加载模型…</div>
-            ) : null}
-            {state.groups.map((group) => (
-              <section key={group.id}>
-                <div className="re-model-group-title">{group.name}</div>
-                {group.models.map((model) => {
-                  const selected = state.current?.provider === group.id && state.current.model === model.id
-                  const key = aliasKeyOf(group.id, model.id)
-                  const displayName = aliasMap[key] || model.name
-                  const isEditing = editing === key
-                  return (
-                    <div key={model.id} className="re-model-item">
-                      <button
-                        type="button"
-                        role="menuitemradio"
-                        aria-checked={selected}
-                        className="re-model-option"
-                        disabled={busy}
-                        onClick={() => void chooseModel(group.id, model.id, model.reasoning?.defaultEffort)}
-                      >
-                        <span className="re-model-option-copy">
-                          <span className="re-model-option-name">{displayName}</span>
-                          {isEditing ? (
-                            <span className="re-model-option-desc">全称：{model.name}</span>
-                          ) : model.description === undefined ? null : (
-                            <span className="re-model-option-desc">{model.description}</span>
-                          )}
-                        </span>
-                        <span className="re-model-option-actions">
+            {paneMode === 'settings' ? (
+              <SettingsPane onBack={() => setPaneMode('main')} />
+            ) : (
+              <>
+                <div className="re-peak-panel">
+                  <div className="re-peak-row">
+                    <span className="re-peak-dot" style={{ background: peakAccent }} aria-hidden="true" />
+                    <span className="re-peak-state" style={{ color: peakAccent }}>{peakStateName}</span>
+                    <span className="re-peak-desc">{peak.peak ? '高峰时段 · 全价' : '空闲时段 · 半价'}</span>
+                    <button
+                      type="button"
+                      className="re-pane-gear"
+                      title="设置"
+                      aria-label="插件设置"
+                      onClick={() => setPaneMode('settings')}
+                    >
+                      ⚙
+                    </button>
+                  </div>
+                  <div className="re-peak-countdown">
+                    距 {peakTargetName}（{peakTargetDesc}）还有：
+                    <span className="re-peak-time" style={{ color: peakTargetAccent }}>
+                      {formatDur(peak.secondsToTarget)}
+                    </span>
+                  </div>
+                </div>
+                <div className="re-peak-sep" />
+                <TokenStats connection={connection} groups={state.groups} />
+                <div className="re-peak-sep" />
+                {state.status === 'loading' && state.groups.length === 0 ? (
+                  <div className="re-model-status">正在加载模型…</div>
+                ) : null}
+                {state.groups.map((group) => (
+                  <section key={group.id}>
+                    <div className="re-model-group-title">{group.name}</div>
+                    {group.models.map((model) => {
+                      const selected = state.current?.provider === group.id && state.current.model === model.id
+                      const key = aliasKeyOf(group.id, model.id)
+                      const displayName = aliasMap[key] || model.name
+                      const isEditing = editing === key
+                      return (
+                        <div key={model.id} className="re-model-item">
                           <button
                             type="button"
-                            className="re-model-edit-btn"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              startEdit(group.id, model.id)
-                            }}
+                            role="menuitemradio"
+                            aria-checked={selected}
+                            className="re-model-option"
+                            disabled={busy}
+                            onClick={() => void chooseModel(group.id, model.id, model.reasoning?.defaultEffort)}
                           >
-                            编辑
+                            <span className="re-model-option-copy">
+                              <span className="re-model-option-name">{displayName}</span>
+                              {isEditing ? (
+                                <span className="re-model-option-desc">全称：{model.name}</span>
+                              ) : model.description === undefined ? null : (
+                                <span className="re-model-option-desc">{model.description}</span>
+                              )}
+                            </span>
+                            <span className="re-model-option-actions">
+                              <button
+                                type="button"
+                                className="re-model-edit-btn"
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  startEdit(group.id, model.id)
+                                }}
+                              >
+                                编辑
+                              </button>
+                              <span className="re-model-check" aria-hidden="true">{selected ? '✓' : ''}</span>
+                            </span>
                           </button>
-                          <span className="re-model-check" aria-hidden="true">{selected ? '✓' : ''}</span>
-                        </span>
-                      </button>
-                      {isEditing ? (
-                        <div className="re-model-editor">
-                          <div className="re-model-editor-full">全称：{model.name}</div>
-                          <div className="re-model-editor-row">
+                          {isEditing ? (
+                            <div className="re-model-editor">
+                              <div className="re-model-editor-full">全称：{model.name}</div>
+                              <div className="re-model-editor-row">
                             <input
                               className="re-model-editor-input"
                               value={aliasDraft}
@@ -919,7 +1017,7 @@ function AdvancedModelSelect({
                           </div>
                         </div>
                       ) : null}
-                      {selected && levels.length >= 2 ? (
+                      {selected && levels.length >= 2 && sliderEnabled ? (
                         <div className="re-advanced">
                           <EffortSlider directory={controller} />
                         </div>
@@ -933,6 +1031,8 @@ function AdvancedModelSelect({
               <div className="re-model-status">没有可用模型</div>
             ) : null}
             {state.error === null ? null : <div className="re-model-error">{state.error}</div>}
+              </>
+            )}
           </div>
         </div>
       ) : null}
@@ -966,6 +1066,14 @@ function ReasoningEffortSetting() {
   )
 }
 
+// ---------------------------------------------------------------------------
+// 隐藏功能：大肥鱼滑块（蓝色大肥鱼替换滑块按钮）。
+// 说明：此功能【不在设置页展示入口】——组件与本地存储开关保留，通过
+// localStorage key `dsh-model-selector.chibi-thumb`（=true 启用）控制；
+// 旧 key（dsh-better-model-selector.chibi-thumb /
+// dsh-reasoning-effort.chibi-thumb）自动迁移。如需再次暴露设置入口，
+// 恢复 apply() 中 settings.general.item 的注册即可。
+// ---------------------------------------------------------------------------
 function ChibiThumbSetting() {
   const sliderEnabled = useSyncExternalStore(enabledStore.subscribe, enabledStore.getSnapshot)
   const enabled = useSyncExternalStore(chibiThumbStore.subscribe, chibiThumbStore.getSnapshot)
@@ -1043,6 +1151,193 @@ function KeepAwakeSetting() {
         </button>
       </div>
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Popover settings pane: opened via the gear at the top right of the model
+// popover. Configures the plugin's own toggles (token stats visibility and
+// keep-awake) without touching the shipped settings page.
+// ---------------------------------------------------------------------------
+function SettingsPane({ onBack }: { onBack: () => void }) {
+  const statsEnabled = useSyncExternalStore(tokenStatsStore.subscribe, tokenStatsStore.getSnapshot)
+  const sliderEnabled = useSyncExternalStore(sliderStore.subscribe, sliderStore.getSnapshot)
+  const keepSnap = useSyncExternalStore(
+    (notify) => keepAwakeScope?.subscribe(notify) ?? (() => undefined),
+    () => keepAwakeScope?.getSnapshot() ?? EMPTY_SETTINGS_SNAPSHOT,
+  )
+  const keepEnabled = keepSnap.value?.keepAwake === true
+
+  return (
+    <div className="re-pane-settings">
+      <div className="re-pane-settings-head">
+        <button type="button" className="re-pane-back" title="返回" aria-label="返回" onClick={onBack}>
+          ←
+        </button>
+        <span className="re-pane-settings-title">插件设置</span>
+      </div>
+      <div className="re-pane-setting">
+        <div className="re-pane-setting-copy">
+          <div className="re-pane-setting-title">显示 Token 统计</div>
+          <div className="re-pane-setting-desc">在浮窗中显示今日 Token 用量统计</div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-label="显示 Token 统计"
+          aria-checked={statsEnabled}
+          className={`re-setting-switch${statsEnabled ? ' is-on' : ''}`}
+          onClick={() => tokenStatsStore.set(!statsEnabled)}
+        >
+          <span className="re-setting-switch-knob" aria-hidden="true" />
+        </button>
+      </div>
+      <div className="re-pane-setting">
+        <div className="re-pane-setting-copy">
+          <div className="re-pane-setting-title">推理强度滑块</div>
+          <div className="re-pane-setting-desc">在模型菜单中显示推理强度滑块和动态辐射特效，档位随当前模型自动适配</div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-label="启用推理强度滑块"
+          aria-checked={sliderEnabled}
+          className={`re-setting-switch${sliderEnabled ? ' is-on' : ''}`}
+          onClick={() => sliderStore.set(!sliderEnabled)}
+        >
+          <span className="re-setting-switch-knob" aria-hidden="true" />
+        </button>
+      </div>
+      <div className="re-pane-setting">
+        <div className="re-pane-setting-copy">
+          <div className="re-pane-setting-title">保持唤醒</div>
+          <div className="re-pane-setting-desc">DSH 运行期间阻止计算机睡眠/休眠，用于低谷时段定时任务</div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-label="启用保持唤醒"
+          aria-checked={keepEnabled}
+          disabled={keepAwakeScope === null}
+          className={`re-setting-switch${keepEnabled ? ' is-on' : ''}`}
+          onClick={() => {
+            void keepAwakeScope?.set('keepAwake', !keepEnabled)
+          }}
+        >
+          <span className="re-setting-switch-knob" aria-hidden="true" />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// "设置 → 插件"里的本插件专属配置页（注册为 settings.plugins.tab 的
+// 第二个标签页）。顶部展示基础信息（中文名 / 小字简介 / 英文名），点击
+// 展开后可开启/关闭整个插件并配置各项选项。该标签页永远注册，因此插件
+// 总开关关闭后仍可回到这里重新开启。
+// （注：settings.plugin.item 卡需要 host settings 命名空间才被分发，
+// 本插件是纯客户端包，故采用 tab 页形态。）
+// ---------------------------------------------------------------------------
+function PluginConfigCard() {
+  const [open, setOpen] = useState(false)
+  const pluginOn = useSyncExternalStore(pluginStore.subscribe, pluginStore.getSnapshot)
+  const sliderOn = useSyncExternalStore(sliderStore.subscribe, sliderStore.getSnapshot)
+  const statsOn = useSyncExternalStore(tokenStatsStore.subscribe, tokenStatsStore.getSnapshot)
+  const keepSnap = useSyncExternalStore(
+    (notify) => keepAwakeScope?.subscribe(notify) ?? (() => undefined),
+    () => keepAwakeScope?.getSnapshot() ?? EMPTY_SETTINGS_SNAPSHOT,
+  )
+  const keepOn = keepSnap.value?.keepAwake === true
+
+  return (
+    <div className={`re-plugin-card${open ? ' is-open' : ''}`}>
+      <button
+        type="button"
+        className="re-plugin-header"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+      >
+        <span className="re-plugin-headtext">
+          <span className="re-plugin-name">模型选择器增强</span>
+          <span className="re-plugin-desc">模型/思考档位/峰谷计价/定时发送 一站式增强 · dsh-model-selector</span>
+        </span>
+        <span className={`re-plugin-chevron${open ? ' is-open' : ''}`} aria-hidden="true">▾</span>
+      </button>
+      {open ? (
+        <div className="re-plugin-body">
+          <div className="re-plugin-row">
+            <div className="re-plugin-row-copy">
+              <div className="re-plugin-row-title">启用插件</div>
+              <div className="re-plugin-row-desc">关闭后恢复 DSH 原生模型选择器，并隐藏定时发送/统计等全部增强界面</div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-label="启用插件"
+              aria-checked={pluginOn}
+              className={`re-setting-switch${pluginOn ? ' is-on' : ''}`}
+              onClick={() => pluginStore.set(!pluginOn)}
+            >
+              <span className="re-setting-switch-knob" aria-hidden="true" />
+            </button>
+          </div>
+          <div className="re-plugin-row">
+            <div className="re-plugin-row-copy">
+              <div className="re-plugin-row-title">推理强度滑块</div>
+              <div className="re-plugin-row-desc">在模型菜单中显示推理强度滑块和动态辐射特效，档位随当前模型自动适配</div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-label="启用推理强度滑块"
+              aria-checked={sliderOn}
+              disabled={!pluginOn}
+              className={`re-setting-switch${sliderOn ? ' is-on' : ''}`}
+              onClick={() => sliderStore.set(!sliderOn)}
+            >
+              <span className="re-setting-switch-knob" aria-hidden="true" />
+            </button>
+          </div>
+          <div className="re-plugin-row">
+            <div className="re-plugin-row-copy">
+              <div className="re-plugin-row-title">显示 Token 统计</div>
+              <div className="re-plugin-row-desc">在浮窗中显示今日 Token 用量统计</div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-label="显示 Token 统计"
+              aria-checked={statsOn}
+              disabled={!pluginOn}
+              className={`re-setting-switch${statsOn ? ' is-on' : ''}`}
+              onClick={() => tokenStatsStore.set(!statsOn)}
+            >
+              <span className="re-setting-switch-knob" aria-hidden="true" />
+            </button>
+          </div>
+          <div className="re-plugin-row">
+            <div className="re-plugin-row-copy">
+              <div className="re-plugin-row-title">保持唤醒</div>
+              <div className="re-plugin-row-desc">DSH 运行期间阻止计算机睡眠/休眠，用于低谷时段定时任务</div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-label="启用保持唤醒"
+              aria-checked={keepOn}
+              disabled={keepAwakeScope === null || !pluginOn}
+              className={`re-setting-switch${keepOn ? ' is-on' : ''}`}
+              onClick={() => {
+                void keepAwakeScope?.set('keepAwake', !keepOn)
+              }}
+            >
+              <span className="re-setting-switch-knob" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </li>
   )
 }
 
@@ -1618,6 +1913,39 @@ const STATS_REFRESH_MS = 180000
 const STATS_MAX_PAGES = 3
 const STATS_PAGE_MESSAGES = 100
 
+const TOKEN_STATS_ENABLED_KEY = 'dsh-model-selector.token-stats-enabled'
+
+function readTokenStatsEnabled(): boolean {
+  try {
+    return window.localStorage.getItem(TOKEN_STATS_ENABLED_KEY) !== 'false'
+  } catch {
+    return true
+  }
+}
+
+let tokenStatsEnabled = readTokenStatsEnabled()
+const tokenStatsListeners = new Set<() => void>()
+
+const tokenStatsStore = {
+  getSnapshot: () => tokenStatsEnabled,
+  subscribe: (listener: () => void) => {
+    tokenStatsListeners.add(listener)
+    return () => tokenStatsListeners.delete(listener)
+  },
+  set: (enabled: boolean, persist = true) => {
+    if (tokenStatsEnabled === enabled) return
+    tokenStatsEnabled = enabled
+    if (persist) {
+      try {
+        window.localStorage.setItem(TOKEN_STATS_ENABLED_KEY, String(enabled))
+      } catch {
+        // The current page still follows the choice when storage is unavailable.
+      }
+    }
+    tokenStatsListeners.forEach((listener) => listener())
+  },
+}
+
 /** One token total bucket: peak-time, idle-time (Beijing), and the sum. */
 interface TokenBucket {
   peak: number
@@ -1698,6 +2026,8 @@ function usageTokensOf(usage: Record<string, unknown>): number {
 /** Header state shared across one session's history pages (headers are sparse). */
 interface EventWalk {
   header: { provider: string; model: string } | undefined
+  /** Whether the inherited fork/resume seed region (events before session/end-seed) has passed. */
+  seedPassed: boolean
 }
 
 function aggregateEvents(
@@ -1710,6 +2040,12 @@ function aggregateEvents(
 ): void {
   for (const entry of events) {
     const event = entry.event
+    // Forked/resumed sessions carry a copied seed region whose events belong to
+    // the parent session — counting them here would double-count usage.
+    if (!walk.seedPassed) {
+      if (event.type === 'session/end-seed') walk.seedPassed = true
+      continue
+    }
     const data = event.data as Record<string, unknown> | null
     if (event.type === 'request/header' && data !== null && data.header !== undefined) {
       const headerData = data.header as { config?: Record<string, unknown> }
@@ -1750,7 +2086,7 @@ async function collectSessionStats(
   models: Record<string, TokenBucket>,
   prev: Record<string, TokenBucket>,
 ): Promise<void> {
-  const walk: EventWalk = { header: undefined }
+  const walk: EventWalk = { header: undefined, seedPassed: false }
   let beforeSeq: number | undefined
   for (let page = 0; page < STATS_MAX_PAGES; page += 1) {
     const response = await connection.api.sessions.history({
@@ -1838,9 +2174,10 @@ function TokenStats({ connection, groups }: { connection?: StatsConnection; grou
   const [result, setResult] = useState<StatsProgress | null>(null)
   const [fatal, setFatal] = useState<string | null>(null)
   const aliasMap = useSyncExternalStore(aliasStore.subscribe, aliasStore.getSnapshot)
+  const statsVisible = useSyncExternalStore(tokenStatsStore.subscribe, tokenStatsStore.getSnapshot)
 
   useEffect(() => {
-    if (connection === undefined) return
+    if (connection === undefined || !statsVisible) return
     let disposed = false
     const refresh = async () => {
       setUpdating(true)
@@ -1870,9 +2207,10 @@ function TokenStats({ connection, groups }: { connection?: StatsConnection; grou
       disposed = true
       window.clearInterval(id)
     }
-  }, [connection])
+  }, [connection, statsVisible])
 
   if (connection === undefined) return null
+  if (!statsVisible) return null
 
   const models = stats?.models ?? {}
   const prev = stats?.prev ?? {}
@@ -1975,7 +2313,11 @@ export function apply(ctx: ClientContext) {
 
   ctx.effect(() => {
     const syncStorage = (event: StorageEvent) => {
-      if (event.key === ENABLED_STORAGE_KEY) {
+      if (event.key === PLUGIN_ENABLED_STORAGE_KEY) {
+        pluginStore.set(event.newValue !== 'false', false)
+      } else if (event.key === SLIDER_ENABLED_STORAGE_KEY) {
+        sliderStore.set(event.newValue !== 'false', false)
+      } else if (event.key === ENABLED_STORAGE_KEY) {
         enabledStore.set(event.newValue !== 'false', false)
       } else if (event.key === CHIBI_THUMB_STORAGE_KEY) {
         chibiThumbStore.set(event.newValue === 'true', false)
@@ -1985,19 +2327,8 @@ export function apply(ctx: ClientContext) {
     return () => window.removeEventListener('storage', syncStorage)
   }, 'reasoning-effort: preference sync')
 
-  ctx.slots.inject(SETTINGS_SLOT, () =>
-    ctx.slots.register(
-      { name: SETTINGS_SLOT, id: 'dsh-model-selector-enabled', order: 15 },
-      ReasoningEffortSetting,
-    ),
-  )
-
-  ctx.slots.inject(SETTINGS_SLOT, () =>
-    ctx.slots.register(
-      { name: SETTINGS_SLOT, id: 'dsh-model-selector-chibi-thumb', order: 16 },
-      ChibiThumbSetting,
-    ),
-  )
+  // 插件设置已迁移到"设置 → 插件"的插件卡（PluginConfigCard）与模型浮窗
+  // 齿轮设置页（SettingsPane），不再占用 DSH"设置 → 通用"分区。
 
   const settingsScope = ctx.get('settingsScope') as KeepAwakeSettingsScope | undefined
   if (settingsScope !== undefined) {
@@ -2007,61 +2338,64 @@ export function apply(ctx: ClientContext) {
     })
   }
 
-  ctx.slots.inject(SETTINGS_SLOT, () =>
-    ctx.slots.register(
-      { name: SETTINGS_SLOT, id: 'dsh-model-selector-keep-awake', order: 17 },
-      KeepAwakeSetting,
-    ),
-  )
-
-  ctx.slots.inject('conversation.input.right', () =>
-    ctx.slots.register(
+  // 功能 UI seat 随插件总开关注册/注销；设置 → 插件 的插件卡永远注册，
+  // 因此总开关关闭也不会失去配置入口。
+  let disposeTimerSeat: (() => void) | undefined
+  let disposeDockSeat: (() => void) | undefined
+  let disposeModelSeat: (() => void) | undefined
+  const syncFeatureSeats = () => {
+    if (!pluginStore.getSnapshot()) {
+      disposeTimerSeat?.()
+      disposeTimerSeat = undefined
+      disposeDockSeat?.()
+      disposeDockSeat = undefined
+      disposeModelSeat?.()
+      disposeModelSeat = undefined
+      return
+    }
+    if (disposeModelSeat !== undefined) return
+    disposeTimerSeat = ctx.slots.register(
       { name: 'conversation.input.right', id: 'dsh-model-selector-idle-send', order: 30 },
       TimerSendButton,
-    ),
-  )
-
-  ctx.slots.inject('conversation.input.dock', () =>
-    ctx.slots.register(
+    )
+    disposeDockSeat = ctx.slots.register(
       { name: 'conversation.input.dock', id: 'dsh-model-selector-deferred', order: 21 },
       DeferredPanel,
+    )
+    disposeModelSeat = ctx.slots.register(
+      {
+        name: SLOT,
+        priority: -100,
+        inject: (sessionId: SessionId) => {
+          const controller = modelDirectories.directoryFor(sessionId)
+          return {
+            available: true,
+            controller,
+            directory: controller.store,
+            load: () => controller.load().then(() => undefined, () => undefined),
+            select: (selection: ModelSelection) => controller.select(selection).then(() => true, () => false),
+            connection,
+          }
+        },
+      },
+      AdvancedModelSelect,
+    )
+  }
+  const unsubscribePlugin = pluginStore.subscribe(syncFeatureSeats)
+  syncFeatureSeats()
+
+  // 设置 → 插件：本插件专属配置标签页（基础信息 + 展开配置区）。
+  ctx.slots.inject('settings.plugins.tab', () =>
+    ctx.slots.register(
+      { name: 'settings.plugins.tab', id: 'dsh-model-selector', order: 10, label: '模型选择器增强' },
+      PluginConfigCard,
     ),
   )
 
-  ctx.slots.inject(SLOT, () => {
-    let disposeModelSeat: (() => void) | undefined
-    const syncModelSeat = () => {
-      if (!enabledStore.getSnapshot()) {
-        disposeModelSeat?.()
-        disposeModelSeat = undefined
-        return
-      }
-      if (disposeModelSeat !== undefined) return
-      disposeModelSeat = ctx.slots.register(
-        {
-          name: SLOT,
-          priority: -100,
-          inject: (sessionId: SessionId) => {
-            const controller = modelDirectories.directoryFor(sessionId)
-            return {
-              available: true,
-              controller,
-              directory: controller.store,
-              load: () => controller.load().then(() => undefined, () => undefined),
-              select: (selection: ModelSelection) => controller.select(selection).then(() => true, () => false),
-              connection,
-            }
-          },
-        },
-        AdvancedModelSelect,
-      )
-    }
-
-    const unsubscribe = enabledStore.subscribe(syncModelSeat)
-    syncModelSeat()
-    return () => {
-      unsubscribe()
-      disposeModelSeat?.()
-    }
-  })
+  return () => {
+    unsubscribePlugin()
+    disposeTimerSeat?.()
+    disposeDockSeat?.()
+    disposeModelSeat?.()
+  }
 }

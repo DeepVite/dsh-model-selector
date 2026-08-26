@@ -339,6 +339,167 @@ export const CSS = `
   margin: 6px 0 4px;
   background: var(--dsw-alias-stroke-secondary, rgba(121,126,145,.16));
 }
+.re-pane-gear {
+  flex: none;
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--dsw-alias-label-tertiary, #9296a0);
+  background: transparent;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: background 120ms ease, color 120ms ease;
+}
+.re-pane-gear:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(120,125,140,.09));
+  color: var(--dsw-alias-label-primary, #f2f4f8);
+}
+.re-pane-settings { padding: 4px 10px 10px; }
+.re-pane-settings-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 2px 2px 4px;
+}
+.re-pane-back {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--dsw-alias-label-tertiary, #9296a0);
+  background: transparent;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: background 120ms ease, color 120ms ease;
+}
+.re-pane-back:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(120,125,140,.09));
+  color: var(--dsw-alias-label-primary, #f2f4f8);
+}
+.re-pane-settings-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 24px;
+  color: var(--dsw-alias-label-primary, #15171b);
+}
+.re-pane-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 2px;
+}
+.re-pane-setting + .re-pane-setting {
+  border-top: 1px solid var(--dsw-alias-stroke-secondary, rgba(121,126,145,.16));
+}
+.re-pane-setting-copy { min-width: 0; }
+.re-pane-setting-title {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  color: var(--dsw-alias-label-primary, #15171b);
+}
+.re-pane-setting-desc {
+  margin-top: 2px;
+  font-size: 10px;
+  line-height: 15px;
+  color: var(--dsw-alias-label-tertiary, #9296a0);
+}
+.re-pane-setting .re-setting-switch { flex: none; }
+.re-plugin-card {
+  border: 1px solid var(--dsw-alias-border-l2, rgba(121, 126, 145, .2));
+  background: var(--dsw-alias-bg-layer-3, #fff);
+  border-radius: 12px;
+  list-style: none;
+  transition: border-color .16s, background .16s;
+}
+.re-plugin-card:hover { border-color: var(--dsw-alias-label-dimmed, #6b6f78); }
+.re-plugin-card.is-open {
+  background: var(--dsw-alias-bg-layer-2, #fafbfc);
+  border-color: var(--dsw-alias-label-dimmed, #6b6f78);
+}
+.re-plugin-header {
+  appearance: none;
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+}
+.re-plugin-header:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary, #4f73ff);
+  outline-offset: -2px;
+}
+.re-plugin-headtext {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.re-plugin-name {
+  color: var(--dsw-alias-label-primary, #15171b);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.re-plugin-desc {
+  color: var(--dsw-alias-label-tertiary, #9296a0);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.re-plugin-chevron {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary, #9296a0);
+  font-size: 14px;
+  line-height: 1;
+  transition: transform .16s;
+}
+.re-plugin-chevron.is-open { transform: rotate(180deg); }
+.re-plugin-body {
+  border-top: 1px solid var(--dsw-alias-border-l2, rgba(121, 126, 145, .2));
+  margin: 0 16px;
+  padding: 4px 0 8px;
+}
+.re-plugin-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+}
+.re-plugin-row + .re-plugin-row { border-top: 1px solid var(--dsw-alias-border-l2, rgba(121, 126, 145, .16)); }
+.re-plugin-row-copy { min-width: 0; flex: 1; }
+.re-plugin-row-title {
+  color: var(--dsw-alias-label-primary, #15171b);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+.re-plugin-row-desc {
+  margin-top: 2px;
+  color: var(--dsw-alias-label-tertiary, #9296a0);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.re-plugin-row .re-setting-switch { flex: none; }
 .re-model-name {
   overflow: hidden;
   text-overflow: ellipsis;
