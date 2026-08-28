@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.0] - 2026-08-26
+
+### Added
+- **GLM Coding Plan peak/idle reminder**: new optional hint (default off) shown in the model popup, with a settings toggle — weekday peak window is Mon–Fri 14:00–18:00; off-peak calls earn a 50% credit discount.
+
+### Removed
+- The **chibi "big fish" thumb** feature entirely (asset, CSS, keyframes, hidden store, dormant `ChibiThumbSetting` component, storage keys). The slider always renders the standard neon knob now; the npm bundle drops from ~2.6 MB to ~130 KB.
+
+### Notes
+- README no longer presents the project as a derivative of `dsh-reasoning-effort`; LICENSE retains the upstream NOTICE for Apache-2.0 compliance.
+
 ## [0.3.0] - 2026-08-23
 
 ### Added
@@ -33,11 +44,5 @@ All notable changes to this project are documented in this file.
 ### Removed
 - The separate `conversation.input.left` peak pill component (logic merged into the model selector).
 - The `prepack` build step (runtime bundle `lib/client/index.js` is shipped pre-built).
-
-## [0.4.0] - 2026-08-15 (upstream)
-
-### Added
-
-- Optional eight-frame chibi runner thumb, disabled by default.
 
 *(Earlier history belongs to upstream `dsh-reasoning-effort`; see the original repository.)*

@@ -69,9 +69,7 @@ const ENABLED_STORAGE_KEY = 'dsh-model-selector.enabled'
 const LEGACY_ENABLED_STORAGE_KEY = '@dsh-external/dsh-reasoning-effort.enabled'
 const OLD_ENABLED_STORAGE_KEY = 'dsh-better-model-selector.enabled'
 const OLDER_ENABLED_STORAGE_KEY = 'dsh-reasoning-effort.enabled'
-const CHIBI_THUMB_STORAGE_KEY = 'dsh-model-selector.chibi-thumb'
-const OLD_CHIBI_THUMB_STORAGE_KEY = 'dsh-better-model-selector.chibi-thumb'
-const OLDER_CHIBI_THUMB_STORAGE_KEY = 'dsh-reasoning-effort.chibi-thumb'
+
 export const inject = ['slots', 'modelDirectories']
 
 function readEnabledPreference(): boolean {
@@ -227,36 +225,6 @@ const glmReminderStore = {
   },
 }
 
-function readChibiThumbPreference(): boolean {
-  try {
-    return (window.localStorage.getItem(CHIBI_THUMB_STORAGE_KEY) ?? window.localStorage.getItem(OLD_CHIBI_THUMB_STORAGE_KEY) ?? window.localStorage.getItem(OLDER_CHIBI_THUMB_STORAGE_KEY)) === 'true'
-  } catch {
-    return false
-  }
-}
-
-let chibiThumbPreference = readChibiThumbPreference()
-const chibiThumbListeners = new Set<() => void>()
-
-const chibiThumbStore = {
-  getSnapshot: () => chibiThumbPreference,
-  subscribe: (listener: () => void) => {
-    chibiThumbListeners.add(listener)
-    return () => chibiThumbListeners.delete(listener)
-  },
-  set: (enabled: boolean, persist = true) => {
-    if (chibiThumbPreference === enabled) return
-    chibiThumbPreference = enabled
-    if (persist) {
-      try {
-        window.localStorage.setItem(CHIBI_THUMB_STORAGE_KEY, String(enabled))
-      } catch {
-        // The current page still follows the choice when storage is unavailable.
-      }
-    }
-    chibiThumbListeners.forEach((listener) => listener())
-  },
-}
 
 // ---------------------------------------------------------------------------
 // Model alias (short name) store.
@@ -470,7 +438,7 @@ function EffortSlider({ directory }: { directory: ModelDirectory }) {
   const [committing, setCommitting] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [localError, setLocalError] = useState<string | null>(null)
-  const chibiThumb = useSyncExternalStore(chibiThumbStore.subscribe, chibiThumbStore.getSnapshot)
+
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const committedRef = useRef('')
@@ -760,7 +728,7 @@ function EffortSlider({ directory }: { directory: ModelDirectory }) {
 
   return (
     <div
-      className={`re-effort${chibiThumb ? ' is-chibi' : ''}${dragging ? ' is-dragging' : ''}${busy ? ' is-busy' : ''}${error === null ? '' : ' is-error'}`}
+      className={`re-effort${dragging ? ' is-dragging' : ''}${busy ? ' is-busy' : ''}${error === null ? '' : ' is-error'}`}
       title={title}
     >
       <div className="re-effort-inner">
@@ -1105,41 +1073,6 @@ function ReasoningEffortSetting() {
   )
 }
 
-// ---------------------------------------------------------------------------
-// 隐藏功能：大肥鱼滑块（蓝色大肥鱼替换滑块按钮）。
-// 说明：此功能【不在设置页展示入口】——组件与本地存储开关保留，通过
-// localStorage key `dsh-model-selector.chibi-thumb`（=true 启用）控制；
-// 旧 key（dsh-better-model-selector.chibi-thumb /
-// dsh-reasoning-effort.chibi-thumb）自动迁移。如需再次暴露设置入口，
-// 恢复 apply() 中 settings.general.item 的注册即可。
-// ---------------------------------------------------------------------------
-function ChibiThumbSetting() {
-  const sliderEnabled = useSyncExternalStore(enabledStore.subscribe, enabledStore.getSnapshot)
-  const enabled = useSyncExternalStore(chibiThumbStore.subscribe, chibiThumbStore.getSnapshot)
-
-  return (
-    <div className="re-setting-row">
-      <div className="re-setting-copy">
-        <div className="re-setting-title">大肥鱼滑块</div>
-        <div className="re-setting-description">用大肥鱼替换滑块按钮</div>
-      </div>
-      <div className="re-setting-control">
-        <span className="re-setting-state">{enabled ? '启用' : '停用'}</span>
-        <button
-          type="button"
-          role="switch"
-          aria-label="启用大肥鱼滑块"
-          aria-checked={enabled}
-          disabled={!sliderEnabled}
-          className={`re-setting-switch${enabled ? ' is-on' : ''}`}
-          onClick={() => chibiThumbStore.set(!enabled)}
-        >
-          <span className="re-setting-switch-knob" aria-hidden="true" />
-        </button>
-      </div>
-    </div>
-  )
-}
 
 // ---------------------------------------------------------------------------
 // Keep-awake switch. The host half owns the Windows execution state; this
@@ -2451,9 +2384,7 @@ export function apply(ctx: ClientContext) {
         glmReminderStore.set(event.newValue === 'true', false)
       } else if (event.key === ENABLED_STORAGE_KEY) {
         enabledStore.set(event.newValue !== 'false', false)
-      } else if (event.key === CHIBI_THUMB_STORAGE_KEY) {
-        chibiThumbStore.set(event.newValue === 'true', false)
-      }
+
     }
     window.addEventListener('storage', syncStorage)
     return () => window.removeEventListener('storage', syncStorage)
