@@ -66,16 +66,13 @@ interface StatsHistoryEntry {
 const SLOT = 'conversation.input.model'
 const SETTINGS_SLOT = 'settings.general.item'
 const ENABLED_STORAGE_KEY = 'dsh-model-selector.enabled'
-const LEGACY_ENABLED_STORAGE_KEY = '@dsh-external/dsh-reasoning-effort.enabled'
-const OLD_ENABLED_STORAGE_KEY = 'dsh-better-model-selector.enabled'
-const OLDER_ENABLED_STORAGE_KEY = 'dsh-reasoning-effort.enabled'
+
 
 export const inject = ['slots', 'modelDirectories']
 
 function readEnabledPreference(): boolean {
   try {
-    const current = window.localStorage.getItem(ENABLED_STORAGE_KEY)
-    const stored = current ?? window.localStorage.getItem(OLD_ENABLED_STORAGE_KEY) ?? window.localStorage.getItem(OLDER_ENABLED_STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_ENABLED_STORAGE_KEY)
+    const stored = window.localStorage.getItem(ENABLED_STORAGE_KEY)
     return stored !== 'false'
   } catch {
     return true
@@ -155,9 +152,6 @@ function readSliderEnabled(): boolean {
     const current = window.localStorage.getItem(SLIDER_ENABLED_STORAGE_KEY)
     if (current !== null) return current !== 'false'
     const legacy = window.localStorage.getItem(ENABLED_STORAGE_KEY)
-      ?? window.localStorage.getItem(OLD_ENABLED_STORAGE_KEY)
-      ?? window.localStorage.getItem(OLDER_ENABLED_STORAGE_KEY)
-      ?? window.localStorage.getItem(LEGACY_ENABLED_STORAGE_KEY)
     return legacy === null ? true : legacy !== 'false'
   } catch {
     return true
@@ -230,13 +224,12 @@ const glmReminderStore = {
 // Model alias (short name) store.
 // ---------------------------------------------------------------------------
 const ALIAS_STORAGE_KEY = 'dsh-model-selector.model-aliases'
-const OLD_ALIAS_STORAGE_KEY = 'dsh-better-model-selector.model-aliases'
-const OLDER_ALIAS_STORAGE_KEY = 'dsh-reasoning-effort.model-aliases'
+
 type AliasMap = Record<string, string>
 
 function readAliases(): AliasMap {
   try {
-    const raw = window.localStorage.getItem(ALIAS_STORAGE_KEY) ?? window.localStorage.getItem(OLD_ALIAS_STORAGE_KEY) ?? window.localStorage.getItem(OLDER_ALIAS_STORAGE_KEY)
+    const raw = window.localStorage.getItem(ALIAS_STORAGE_KEY)
     if (raw === null) return {}
     const parsed: unknown = JSON.parse(raw)
     if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {

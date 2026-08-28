@@ -54,7 +54,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "bump": "dsh plugin --profile web update dsh-better-model-selector"
+    "bump": "dsh plugin --profile web update dsh-model-selector"
   },
   "dsh": {
     "bundle": {

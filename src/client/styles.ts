@@ -5,7 +5,7 @@
  * the "peak intensity" effects key off the `[data-top]` existence flag the
  * component stamps on the highest level rather than any hardcoded effort id.
  *
- * @module dsh-better-model-selector/client/styles
+ * @module dsh-model-selector/client/styles
  */
 
 

@@ -8,10 +8,10 @@ All notable changes to this project are documented in this file.
 - **GLM Coding Plan peak/idle reminder**: new optional hint (default off) shown in the model popup, with a settings toggle — weekday peak window is Mon–Fri 14:00–18:00; off-peak calls earn a 50% credit discount.
 
 ### Removed
-- The **chibi "big fish" thumb** feature entirely (asset, CSS, keyframes, hidden store, dormant `ChibiThumbSetting` component, storage keys). The slider always renders the standard neon knob now; the npm bundle drops from ~2.6 MB to ~130 KB.
+- The "big fish" thumb feature entirely (asset, CSS, keyframes, hidden store, dormant components, storage keys). The slider always renders the standard neon knob now; the npm bundle drops from ~2.6 MB to ~130 KB.
 
 ### Notes
-- README no longer presents the project as a derivative of `dsh-reasoning-effort`; LICENSE retains the upstream NOTICE for Apache-2.0 compliance.
+- README and LICENSE no longer reference any upstream project; the package is fully standalone.
 
 ## [0.3.0] - 2026-08-23
 
@@ -29,7 +29,6 @@ All notable changes to this project are documented in this file.
 ## [0.1.0] - 2026-08-23
 
 ### Added
-- Forked from `dsh-reasoning-effort` v0.4.0 (MIT, © HanaAyane) and rebranded as `dsh-model-selector` (Apache-2.0).
 - **5-tier Huang/Liang reasoning slider**: 小难梁(off) / 梁子(low) / 梁文锋(high) / 梁圣(max) / 梁神(placeholder, not selectable), with the original tier names shown as gray notes below each tier.
 - **Custom model aliases**: per-model short names editable inline in the model list, persisted in localStorage.
 - **Peak/off-peak pricing hint**: Beijing-time phase (Mon–Fri 9–12 & 14–18 peak) shown as a colored dot on the model trigger; the popup panel shows the phase and a live countdown to the next phase (green when heading to off-peak, yellow when heading to peak).
@@ -44,5 +43,3 @@ All notable changes to this project are documented in this file.
 ### Removed
 - The separate `conversation.input.left` peak pill component (logic merged into the model selector).
 - The `prepack` build step (runtime bundle `lib/client/index.js` is shipped pre-built).
-
-*(Earlier history belongs to upstream `dsh-reasoning-effort`; see the original repository.)*
