@@ -12,9 +12,6 @@
 
 **DSH（DeepSeek Harness）模型选择与推理档位插件的增强版：把模型选择、思考档位、时段计价提示整合到一个按钮里，一键安装、点开即用。**
 
-**Derived from [HanaAyane/dsh-reasoning-effort](https://github.com/HanaAyane/dsh-reasoning-effort) (MIT), released under Apache-2.0.**
-**基于 [HanaAyane/dsh-reasoning-effort](https://github.com/HanaAyane/dsh-reasoning-effort) (MIT) 二次开发，以 Apache-2.0 协议发布。**
-
 ---
 
 ## ✨ Features
@@ -76,7 +73,5 @@ npm exec -- dsh plugin --profile web update dsh-model-selector
 ## 📄 License
 
 Licensed under the **Apache License 2.0** — see [LICENSE](LICENSE).
-
-Portions derived from [dsh-reasoning-effort](https://github.com/HanaAyane/dsh-reasoning-effort) (Copyright © HanaAyane, MIT), preserved in LICENSE.
 
 © 2026 DeepVite · ibronfree@gmail.com

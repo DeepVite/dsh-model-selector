@@ -12,9 +12,6 @@
 
 **An enhanced model-selector and reasoning-effort plugin for DSH (DeepSeek Harness): model picking, thinking tiers, and peak/off-peak pricing hints unified into one button. One-command install, open and go.**
 
-**基于 [HanaAyane/dsh-reasoning-effort](https://github.com/HanaAyane/dsh-reasoning-effort) (MIT) 二次开发，以 Apache-2.0 协议发布。**
-**Derived from [HanaAyane/dsh-reasoning-effort](https://github.com/HanaAyane/dsh-reasoning-effort) (MIT), released under Apache-2.0.**
-
 ---
 
 ## ✨ 当前功能
@@ -82,7 +79,5 @@ npm exec -- dsh plugin --profile web update dsh-model-selector
 ## 📄 许可证
 
 本项目采用 **Apache License 2.0**，详情见 [LICENSE](LICENSE)。
-
-部分代码源自 [dsh-reasoning-effort](https://github.com/HanaAyane/dsh-reasoning-effort)（Copyright © HanaAyane，MIT 许可），已在 LICENSE 中保留声明。
 
 © 2026 DeepVite · ibronfree@gmail.com

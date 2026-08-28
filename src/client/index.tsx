@@ -189,6 +189,44 @@ const sliderStore = {
   },
 }
 
+// ---------------------------------------------------------------------------
+// GLM Coding Plan 高峰/空闲提醒开关（默认关闭）：
+// 非高峰时段模型调用按基础积分消耗的 50% 抵扣；
+// 高峰时段 = 每周一至周五 14:00–18:00（UTC+8）。
+// ---------------------------------------------------------------------------
+const GLM_REMINDER_STORAGE_KEY = 'dsh-model-selector.glm-reminder'
+
+function readGlmReminder(): boolean {
+  try {
+    return window.localStorage.getItem(GLM_REMINDER_STORAGE_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+let glmReminderEnabled = readGlmReminder()
+const glmReminderListeners = new Set<() => void>()
+
+const glmReminderStore = {
+  getSnapshot: () => glmReminderEnabled,
+  subscribe: (listener: () => void) => {
+    glmReminderListeners.add(listener)
+    return () => glmReminderListeners.delete(listener)
+  },
+  set: (enabled: boolean, persist = true) => {
+    if (glmReminderEnabled === enabled) return
+    glmReminderEnabled = enabled
+    if (persist) {
+      try {
+        window.localStorage.setItem(GLM_REMINDER_STORAGE_KEY, String(enabled))
+      } catch {
+        // The current page still follows the choice when storage is unavailable.
+      }
+    }
+    glmReminderListeners.forEach((listener) => listener())
+  },
+}
+
 function readChibiThumbPreference(): boolean {
   try {
     return (window.localStorage.getItem(CHIBI_THUMB_STORAGE_KEY) ?? window.localStorage.getItem(OLD_CHIBI_THUMB_STORAGE_KEY) ?? window.localStorage.getItem(OLDER_CHIBI_THUMB_STORAGE_KEY)) === 'true'
@@ -950,6 +988,7 @@ function AdvancedModelSelect({
                     </span>
                   </div>
                 </div>
+                <GlmHint now={now} />
                 <div className="re-peak-sep" />
                 <TokenStats connection={connection} groups={state.groups} />
                 <div className="re-peak-sep" />
@@ -1162,6 +1201,7 @@ function KeepAwakeSetting() {
 function SettingsPane({ onBack }: { onBack: () => void }) {
   const statsEnabled = useSyncExternalStore(tokenStatsStore.subscribe, tokenStatsStore.getSnapshot)
   const sliderEnabled = useSyncExternalStore(sliderStore.subscribe, sliderStore.getSnapshot)
+  const glmEnabled = useSyncExternalStore(glmReminderStore.subscribe, glmReminderStore.getSnapshot)
   const keepSnap = useSyncExternalStore(
     (notify) => keepAwakeScope?.subscribe(notify) ?? (() => undefined),
     () => keepAwakeScope?.getSnapshot() ?? EMPTY_SETTINGS_SNAPSHOT,
@@ -1227,6 +1267,22 @@ function SettingsPane({ onBack }: { onBack: () => void }) {
           <span className="re-setting-switch-knob" aria-hidden="true" />
         </button>
       </div>
+      <div className="re-pane-setting">
+        <div className="re-pane-setting-copy">
+          <div className="re-pane-setting-title">GLM 提醒</div>
+          <div className="re-pane-setting-desc">在浮窗显示 GLM Coding Plan 高峰/空闲提醒（周一至五 14:00–18:00 高峰，空闲 50% 积分抵扣）</div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-label="启用 GLM 提醒"
+          aria-checked={glmEnabled}
+          className={`re-setting-switch${glmEnabled ? ' is-on' : ''}`}
+          onClick={() => glmReminderStore.set(!glmEnabled)}
+        >
+          <span className="re-setting-switch-knob" aria-hidden="true" />
+        </button>
+      </div>
     </div>
   )
 }
@@ -1244,6 +1300,7 @@ function PluginConfigCard() {
   const pluginOn = useSyncExternalStore(pluginStore.subscribe, pluginStore.getSnapshot)
   const sliderOn = useSyncExternalStore(sliderStore.subscribe, sliderStore.getSnapshot)
   const statsOn = useSyncExternalStore(tokenStatsStore.subscribe, tokenStatsStore.getSnapshot)
+  const glmOn = useSyncExternalStore(glmReminderStore.subscribe, glmReminderStore.getSnapshot)
   const keepSnap = useSyncExternalStore(
     (notify) => keepAwakeScope?.subscribe(notify) ?? (() => undefined),
     () => keepAwakeScope?.getSnapshot() ?? EMPTY_SETTINGS_SNAPSHOT,
@@ -1335,9 +1392,58 @@ function PluginConfigCard() {
               <span className="re-setting-switch-knob" aria-hidden="true" />
             </button>
           </div>
+          <div className="re-plugin-row">
+            <div className="re-plugin-row-copy">
+              <div className="re-plugin-row-title">GLM 提醒</div>
+              <div className="re-plugin-row-desc">在浮窗显示 GLM Coding Plan 高峰/空闲提醒（周一至五 14:00–18:00 高峰，空闲 50% 积分抵扣）</div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-label="启用 GLM 提醒"
+              aria-checked={glmOn}
+              disabled={!pluginOn}
+              className={`re-setting-switch${glmOn ? ' is-on' : ''}`}
+              onClick={() => glmReminderStore.set(!glmOn)}
+            >
+              <span className="re-setting-switch-knob" aria-hidden="true" />
+            </button>
+          </div>
         </div>
       ) : null}
-    </li>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// GLM Coding Plan 高峰/空闲提醒（浮窗内，设置开关默认关闭）。
+// 高峰 = 每周一至周五 14:00–18:00（UTC+8）全积分；
+// 空闲 = 其余时间，模型调用按基础积分消耗的 50% 抵扣。
+// ---------------------------------------------------------------------------
+function GlmHint({ now }: { now: number }) {
+  const enabled = useSyncExternalStore(glmReminderStore.subscribe, glmReminderStore.getSnapshot)
+  if (!enabled) return null
+  const glm = glmPhase(now)
+  const stateName = glm.peak ? 'GLM 高峰' : 'GLM 空闲'
+  const stateDesc = glm.peak ? '14:00–18:00 · 全积分' : '50% 积分抵扣'
+  const accent = glm.peak ? '#f6b93b' : '#3ddc84'
+  const targetName = glm.peak ? 'GLM 空闲（50% 抵扣）' : 'GLM 高峰（全积分）'
+  const targetAccent = glm.peak ? '#3ddc84' : '#f6b93b'
+  return (
+    <div className="re-glm-panel">
+      <div className="re-peak-row">
+        <span className="re-peak-dot" style={{ background: accent }} aria-hidden="true" />
+        <span className="re-glm-badge" aria-hidden="true">GLM</span>
+        <span className="re-peak-state" style={{ color: accent }}>{stateName}</span>
+        <span className="re-peak-desc">{stateDesc}</span>
+      </div>
+      <div className="re-peak-countdown">
+        距 {targetName} 还有：
+        <span className="re-peak-time" style={{ color: targetAccent }}>
+          {formatDur(glm.secondsToTarget)}
+        </span>
+      </div>
+    </div>
   )
 }
 
@@ -1378,6 +1484,30 @@ function phase(ms: number): { peak: boolean; secondsToTarget: number } {
     }
   }
   return { peak: false, secondsToTarget: 0 }
+}
+
+/**
+ * GLM Coding Plan pricing phase: peak = Mon–Fri 14:00–18:00 (UTC+8);
+ * everything else is off-peak (50% credit rebate). Returns the current state
+ * plus the countdown (seconds) and the target state name.
+ */
+function glmPhase(ms: number): { peak: boolean; secondsToTarget: number; targetPeak: boolean } {
+  const { day, sec } = beijingParts(ms)
+  const weekday = day >= 1 && day <= 5
+  const peak = weekday && sec >= 14 * 3600 && sec < 18 * 3600
+  if (peak) return { peak: true, secondsToTarget: 18 * 3600 - sec, targetPeak: false }
+  const shifted = ms + BJ_OFFSET
+  const startOfShiftedDay = shifted - sec * 1000
+  if (weekday && sec < 14 * 3600) {
+    return { peak: false, secondsToTarget: (startOfShiftedDay + 14 * 3600 * 1000 - shifted) / 1000, targetPeak: true }
+  }
+  for (let i = 1; i <= 7; i++) {
+    const nd = (day + i) % 7
+    if (nd >= 1 && nd <= 5) {
+      return { peak: false, secondsToTarget: (startOfShiftedDay + i * 86400000 + 14 * 3600 * 1000 - shifted) / 1000, targetPeak: true }
+    }
+  }
+  return { peak: false, secondsToTarget: 0, targetPeak: true }
 }
 
 function formatDur(sec: number): string {
@@ -2317,6 +2447,8 @@ export function apply(ctx: ClientContext) {
         pluginStore.set(event.newValue !== 'false', false)
       } else if (event.key === SLIDER_ENABLED_STORAGE_KEY) {
         sliderStore.set(event.newValue !== 'false', false)
+      } else if (event.key === GLM_REMINDER_STORAGE_KEY) {
+        glmReminderStore.set(event.newValue === 'true', false)
       } else if (event.key === ENABLED_STORAGE_KEY) {
         enabledStore.set(event.newValue !== 'false', false)
       } else if (event.key === CHIBI_THUMB_STORAGE_KEY) {

@@ -334,6 +334,17 @@ export const CSS = `
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
+.re-glm-panel { padding: 0 12px 0; }
+.re-glm-badge {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 14px;
+  color: var(--dsw-alias-label-secondary, #9296a0);
+  background: var(--dsw-alias-fill-tertiary, rgba(120, 125, 140, .14));
+}
 .re-peak-sep {
   height: 1px;
   margin: 6px 0 4px;
