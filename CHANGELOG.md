@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.1] - 2026-08-28
+
+### Changed
+- Package is now fully standalone: removed all upstream references and the legacy storage-key fallback chain (enabled/slider/alias keys now read only their own `dsh-model-selector.*` names). Existing users' settings stored under newer keys are unaffected; older exported keys are no longer migrated.
+
 ## [0.4.0] - 2026-08-26
 
 ### Added
