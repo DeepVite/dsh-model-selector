@@ -401,6 +401,76 @@ export const CSS = `
   color: var(--dsw-alias-label-tertiary, #9296a0);
 }
 .re-pane-setting .re-setting-switch { flex: none; }
+.re-pane-setting.is-path { flex-wrap: wrap; row-gap: 7px; }
+.re-pane-path-row {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.re-pane-path { flex: 1 1 auto; min-width: 0; font-size: 11px; }
+.re-pane-path-note {
+  flex: 1 1 100%;
+  font-size: 10px;
+  line-height: 14px;
+}
+.re-pane-path-note.is-ok { color: #3ddc84; }
+.re-pane-path-note.is-err { color: var(--dsw-alias-state-error-primary, #c83e4d); }
+.re-pane-path select.re-pane-path { appearance: auto; }
+.re-pane-raw {
+  flex: 1 1 100%;
+  min-width: 0;
+  min-height: 140px;
+  max-height: 260px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-stroke-secondary, rgba(121, 126, 145, .2));
+  border-radius: 6px;
+  color: var(--dsw-alias-label-primary, #f2f4f8);
+  background: var(--dsw-alias-bg-elevated, #202126);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 16px;
+  resize: vertical;
+}
+.re-pane-raw:focus {
+  outline: 2px solid var(--dsw-static-blue-400, #5d83ff);
+  outline-offset: 1px;
+}
+.re-glm-alert {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 auto;
+  max-width: calc(var(--dsh-composer-card-max-width, 720px) - 2 * var(--dsh-composer-dock-inset, 4px));
+  padding: 6px 12px;
+  border: 1px solid rgba(200, 137, 44, .45);
+  border-radius: 10px;
+  color: var(--dsw-alias-label-primary, #15171b);
+  background: rgba(200, 137, 44, .12);
+  font-size: 12px;
+  line-height: 18px;
+}
+.re-glm-alert-icon { flex: none; color: #c8892c; }
+.re-glm-alert-text { flex: 1 1 auto; min-width: 0; }
+.re-glm-alert-close {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--dsw-alias-label-tertiary, #9296a0);
+  background: transparent;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.re-glm-alert-close:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(120, 125, 140, .09));
+  color: var(--dsw-alias-label-primary, #f2f4f8);
+}
 .re-plugin-card {
   border: 1px solid var(--dsw-alias-border-l2, rgba(121, 126, 145, .2));
   background: var(--dsw-alias-bg-layer-3, #fff);
@@ -485,6 +555,25 @@ export const CSS = `
   line-height: 1.5;
 }
 .re-plugin-row .re-setting-switch { flex: none; }
+.re-plugin-block {
+  border-top: 1px solid var(--dsw-alias-border-l2, rgba(121, 126, 145, .2));
+  margin: 8px 16px 0;
+  padding: 10px 0 8px;
+}
+.re-plugin-block-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary, #15171b);
+}
+.re-plugin-block-desc {
+  margin: 4px 0 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary, #9296a0);
+}
+.re-plugin-block .re-pane-path-row { margin-top: 6px; }
+.re-pane-raw--wide { min-height: 240px; max-height: 420px; }
 .re-model-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -548,7 +637,30 @@ export const CSS = `
 }
 .re-model-option:hover { background: var(--dsw-alias-fill-tertiary, rgba(120,125,140,.09)); }
 .re-model-pane { max-height: min(545px, 84vh); overflow-y: auto; padding: 7px; }
-.re-model-group-title { padding: 10px 9px 5px; color: var(--dsw-alias-label-tertiary, #9296a0); font-size: 11px; }
+.re-model-group-title { padding: 10px 9px 5px; color: var(--dsw-alias-label-tertiary, #9296a0); font-size: 11px; flex: 1 1 auto; min-width: 0; }
+.re-model-group-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.re-glm-limit-badge {
+  flex: none;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-right: 9px;
+  padding: 2px 8px;
+  border: 1px solid rgba(200, 137, 44, .45);
+  border-radius: 999px;
+  color: #c8892c;
+  background: rgba(200, 137, 44, .1);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+}
 .re-model-option-copy { min-width: 0; }
 .re-model-option-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .re-model-option-desc { display: block; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-tertiary, #9296a0); font-size: 10px; }

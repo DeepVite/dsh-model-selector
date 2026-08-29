@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.0] - 2026-08-28
+
+### Added
+- **GLM Coding Plan limit alert** (default on): detects 429/1308-style "5-hour usage limit reached" errors, dismisses repeats by turn-error seq, and shows the reset time above the composer input. Includes a settings toggle (`dsh-model-selector.glm-limit-alert`) and wiring for host side (settings domain + session use) to back the alert.
+
 ## [0.4.1] - 2026-08-28
 
 ### Changed

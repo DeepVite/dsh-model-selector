@@ -38,14 +38,24 @@ interface ModelSeatProps {
   readonly load: () => void
   readonly select: (selection: ModelSelection) => Promise<boolean>
   readonly connection?: StatsConnection
+  readonly useSession?: <T>(selector: (snapshot: { nodes?: readonly GlmLimitNode[] }) => T) => T
 }
 
-/** Minimal wire faces for the token-stats reader (sessions domain only). */
+/** Minimal wire faces for the token-stats reader (sessions + host + settings domain). */
 interface StatsConnection {
   readonly api: {
     readonly sessions: {
       list(req: { cursor?: string }): Promise<StatsRpc<{ items: StatsSession[] }>>
       history(req: { sessionId: string; beforeSeq?: number; maxMessages?: number }): Promise<StatsRpc<{ events: StatsHistoryEntry[]; hasMore: boolean }>>
+    }
+    readonly host: {
+      describe(req: {}): Promise<StatsRpc<{ home: string; canOpenPath: boolean; cwd?: string }>>
+      openPath(req: { path: string }): Promise<StatsRpc<{ opened: true }>>
+    }
+    readonly settings: {
+      describe(req: {}): Promise<StatsRpc<{ namespaces: Array<{ ns: string; value?: Record<string, unknown> | null; revision: number }> }>>
+      update(req: { ns: string; patch: object }): Promise<StatsRpc<{ revision: number }>>
+      openDocument(req: {}): Promise<StatsRpc<{ opened: true }>>
     }
   }
 }
@@ -217,6 +227,62 @@ const glmReminderStore = {
     }
     glmReminderListeners.forEach((listener) => listener())
   },
+}
+
+// ---------------------------------------------------------------------------
+// GLM Coding Plan 限额提醒开关（默认开启）：自动识别 429/1308 类
+// "已达到 5 小时的使用上限"错误并在输入框上方展示重置时间。
+// ---------------------------------------------------------------------------
+const GLM_LIMIT_ALERT_KEY = 'dsh-model-selector.glm-limit-alert'
+
+function readGlmLimitAlert(): boolean {
+  try {
+    return window.localStorage.getItem(GLM_LIMIT_ALERT_KEY) !== 'false'
+  } catch {
+    return true
+  }
+}
+
+let glmLimitAlertEnabled = readGlmLimitAlert()
+const glmLimitAlertListeners = new Set<() => void>()
+
+const glmLimitStore = {
+  getSnapshot: () => glmLimitAlertEnabled,
+  subscribe: (listener: () => void) => {
+    glmLimitAlertListeners.add(listener)
+    return () => glmLimitAlertListeners.delete(listener)
+  },
+  set: (enabled: boolean, persist = true) => {
+    if (glmLimitAlertEnabled === enabled) return
+    glmLimitAlertEnabled = enabled
+    if (persist) {
+      try {
+        window.localStorage.setItem(GLM_LIMIT_ALERT_KEY, String(enabled))
+      } catch {
+        // The current page still follows the choice when storage is unavailable.
+      }
+    }
+    glmLimitAlertListeners.forEach((listener) => listener())
+  },
+}
+
+/** 已手动关闭过（或已提示过）的 turn-error seq，避免历史错误重复提醒。 */
+const GLM_LIMIT_SEEN_KEY = 'dsh-model-selector.glm-limit-seen'
+
+function readGlmLimitSeen(): number {
+  try {
+    return Number(window.localStorage.getItem(GLM_LIMIT_SEEN_KEY) ?? 0) || 0
+  } catch {
+    return 0
+  }
+}
+
+function writeGlmLimitSeen(seq: number): void {
+  try {
+    window.localStorage.setItem(GLM_LIMIT_SEEN_KEY, String(seq))
+  } catch {
+    // Optional persistence only.
+  }
 }
 
 
@@ -445,6 +511,12 @@ function EffortSlider({ directory }: { directory: ModelDirectory }) {
   const globalPointerCancelRef = useRef<((event: PointerEvent) => void) | null>(null)
   const radiationRef = useRef<RadiationState>({ progress: 0.5, dragging: false })
   const redrawRef = useRef<(() => void) | null>(null)
+  // 梁系列档位标签（小难梁～梁神）只在 DeepSeek 系列模型上显示。
+  const isDeepSeekModel = (() => {
+    const current = directoryState.current
+    if (current === null) return false
+    return current.provider.toLowerCase().includes('deepseek') || current.model.toLowerCase().includes('deepseek')
+  })()
   const available = directoryState.current !== null && levels.length >= 2
   const busy = committing || directoryState.status === 'selecting'
   const error = localError ?? directoryState.error
@@ -704,7 +776,8 @@ function EffortSlider({ directory }: { directory: ModelDirectory }) {
   if (!available) return null
 
   const count = levels.length
-  const slots = count + 1
+  // DeepSeek 模型多一个"梁神"占位槽位；其他模型槽位数 = 实际档位数。
+  const slots = isDeepSeekModel ? count + 1 : count
   const effortName = levels[effortIndex(levels, effort)]?.name ?? effort
   const isTop = effortIndex(levels, effort) === count - 1
   const progress = preview / (slots - 1) * 100
@@ -771,23 +844,43 @@ function EffortSlider({ directory }: { directory: ModelDirectory }) {
             />
             <span className="re-effort-knob" aria-hidden="true" />
           </div>
-          <div className="re-effort-labels" aria-hidden="true">
-            {LIANG_LEVELS.map((lvl) => {
-              const pos = lvl.effort === null ? 100 : (lvl.effort / (slots - 1)) * 100
-              const active = lvl.effort !== null && lvl.effort === Math.round(preview)
-              return (
-                <div
-                  key={lvl.name}
-                  className={`re-effort-label${active ? ' is-active' : ''}`}
-                  style={{ left: `${pos}%` }}
-                >
-                  <span className="re-effort-label-text">{lvl.name}</span>
-                  {lvl.sub === null ? null : <span className="re-effort-label-sub">{lvl.sub}</span>}
-                  <span className={`re-effort-label-dot${lvl.effort === null ? ' is-placeholder' : ''}`} />
-                </div>
-              )
-            })}
-          </div>
+          {/* 标签行：DeepSeek 用梁系列档位；其他模型用配置里实际暴露的档位字 */}
+          {isDeepSeekModel ? (
+            <div className="re-effort-labels" aria-hidden="true">
+              {LIANG_LEVELS.map((lvl) => {
+                const pos = lvl.effort === null ? 100 : (lvl.effort / (slots - 1)) * 100
+                const active = lvl.effort !== null && lvl.effort === Math.round(preview)
+                return (
+                  <div
+                    key={lvl.name}
+                    className={`re-effort-label${active ? ' is-active' : ''}`}
+                    style={{ left: `${pos}%` }}
+                  >
+                    <span className="re-effort-label-text">{lvl.name}</span>
+                    {lvl.sub === null ? null : <span className="re-effort-label-sub">{lvl.sub}</span>}
+                    <span className={`re-effort-label-dot${lvl.effort === null ? ' is-placeholder' : ''}`} />
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="re-effort-labels" aria-hidden="true">
+              {levels.map((lvl, index) => {
+                const pos = count <= 1 ? 0 : (index / (count - 1)) * 100
+                const active = index === Math.round(preview)
+                return (
+                  <div
+                    key={lvl.id}
+                    className={`re-effort-label${active ? ' is-active' : ''}`}
+                    style={{ left: `${pos}%` }}
+                  >
+                    <span className="re-effort-label-text">{lvl.name || lvl.id}</span>
+                    <span className="re-effort-label-dot" />
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
       </div>
       {error === null ? null : <span className="re-effort-sr" role="status">{error}</span>}
@@ -803,6 +896,7 @@ function AdvancedModelSelect({
   load,
   select,
   connection,
+  useSession,
 }: ModelSeatProps) {
   const state = useSyncExternalStore(
     (notify) => directory.subscribe(notify),
@@ -817,6 +911,12 @@ function AdvancedModelSelect({
   const triggerRef = useRef<HTMLButtonElement>(null)
   const aliasMap = useSyncExternalStore(aliasStore.subscribe, aliasStore.getSnapshot)
   const sliderEnabled = useSyncExternalStore(sliderStore.subscribe, sliderStore.getSnapshot)
+  const glmLimitOn = useSyncExternalStore(glmLimitStore.subscribe, glmLimitStore.getSnapshot)
+  // GLM Coding Plan 限额用尽提示：显示在 zai-coding-plan 组标题右侧（含倒计时）。
+  const limitError = findLastLimitError(useSession?.((snapshot) => snapshot.nodes) ?? undefined)
+  const limitResetAt = limitError === undefined ? null : parseResetTime(limitError.message)
+  const limitCountdownMs = limitResetAt === null ? Infinity : limitResetAt - now
+  const showLimitBadge = glmLimitOn && limitError !== undefined && limitCountdownMs > 0
   const choice = currentModel(state)
   const levels = sliderLevels(state)
   const effortName = levels[effectiveEffortIndex(levels, state)]?.name ?? '默认'
@@ -924,7 +1024,7 @@ function AdvancedModelSelect({
         <div className="re-model-menu" role={paneMode === 'settings' ? 'dialog' : 'menu'} aria-label={paneMode === 'settings' ? '插件设置' : '模型与推理强度'} aria-busy={busy}>
           <div className="re-model-pane">
             {paneMode === 'settings' ? (
-              <SettingsPane onBack={() => setPaneMode('main')} />
+              <SettingsPane onBack={() => setPaneMode('main')} connection={connection} groups={state.groups} />
             ) : (
               <>
                 <div className="re-peak-panel">
@@ -958,7 +1058,17 @@ function AdvancedModelSelect({
                 ) : null}
                 {state.groups.map((group) => (
                   <section key={group.id}>
-                    <div className="re-model-group-title">{group.name}</div>
+                    <div className="re-model-group-row">
+                      <div className="re-model-group-title">{group.name}</div>
+                      {showLimitBadge && group.id.toLowerCase().includes('zai-coding') ? (
+                        <span
+                          className="re-glm-limit-badge"
+                          title={`GLM Coding Plan 5 小时限额已用尽，将于 ${limitError?.message.match(/\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}/)?.[0] ?? '未知时间'} 重置`}
+                        >
+                          ⚠ GLM 限额已用尽 · {fmtCountdown(limitCountdownMs)} 后重置
+                        </span>
+                      ) : null}
+                    </div>
                     {group.models.map((model) => {
                       const selected = state.current?.provider === group.id && state.current.model === model.id
                       const key = aliasKeyOf(group.id, model.id)
@@ -1124,15 +1234,260 @@ function KeepAwakeSetting() {
 // popover. Configures the plugin's own toggles (token stats visibility and
 // keep-awake) without touching the shipped settings page.
 // ---------------------------------------------------------------------------
-function SettingsPane({ onBack }: { onBack: () => void }) {
+// 模型配置文件路径记忆（⚙ 设置页"模型配置"块）：默认从 host.describe 的
+// home 拼 `$HOME/.dsh/settings.yaml`，DSH 装在自定义目录时可手动改路径。
+const SETTINGS_PATH_KEY = 'dsh-model-selector.settings-file-path'
+
+function readSettingsPath(): string {
+  try {
+    return window.localStorage.getItem(SETTINGS_PATH_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function writeSettingsPath(path: string): void {
+  try {
+    window.localStorage.setItem(SETTINGS_PATH_KEY, path)
+  } catch {
+    // Optional persistence only.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 凭据文件（.credentials.yaml）打开：客户端拿不到 DSH_HOME 环境变量，
+// 因此使用「记住的路径 → 候选路径自动尝试（home/.dsh、home、cwd）→
+// 全失败时让用户填写完整路径（成功后记住）」的策略。
+// ---------------------------------------------------------------------------
+const CREDENTIALS_PATH_KEY = 'dsh-model-selector.credentials-file-path'
+
+function readCredentialsPath(): string {
+  try {
+    return window.localStorage.getItem(CREDENTIALS_PATH_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function writeCredentialsPath(path: string): void {
+  try {
+    window.localStorage.setItem(CREDENTIALS_PATH_KEY, path)
+  } catch {
+    // Optional persistence only.
+  }
+}
+
+async function tryOpenHostPath(connection: StatsConnection, path: string): Promise<boolean> {
+  try {
+    const response = await connection.api.host.openPath({ path })
+    const result = response?.result
+    return result !== undefined && result.ok
+  } catch {
+    return false
+  }
+}
+
+/** 尝试打开凭据文件：记忆路径优先，其次候选路径，失败返回 false。 */
+async function openCredentialsFile(connection: StatsConnection): Promise<{ opened: boolean; path?: string }> {
+  const remembered = readCredentialsPath()
+  if (remembered !== '') {
+    if (await tryOpenHostPath(connection, remembered)) return { opened: true, path: remembered }
+  }
+  const response = await connection.api.host.describe({})
+  const result = response?.result
+  if (result === undefined || !result.ok) return { opened: false }
+  const home = result.value.home
+  const cwd = result.value.cwd ?? ''
+  const sep = home.includes('\\') ? '\\' : '/'
+  const candidates = [
+    `${home}${sep}.dsh${sep}.credentials.yaml`,
+    `${home}${sep}.credentials.yaml`,
+    cwd === '' ? '' : `${cwd}${sep}.dsh${sep}.credentials.yaml`,
+    cwd === '' ? '' : `${cwd}${sep}.credentials.yaml`,
+  ].filter((path) => path !== '')
+  for (const path of candidates) {
+    if (await tryOpenHostPath(connection, path)) {
+      writeCredentialsPath(path)
+      return { opened: true, path }
+    }
+  }
+  return { opened: false }
+}
+
+// ---------------------------------------------------------------------------
+// 默认模型与默认思考强度：读写 Host 的 agent-default-model 设置命名空间
+// （打开新对话时使用）。UI 预设默认值 = DeepSeek flash vision exp / max。
+// ---------------------------------------------------------------------------
+const DEFAULT_MODEL_KEY = 'dsh-model-selector.default-model'
+
+interface DefaultModelState {
+  provider: string
+  model: string
+  reasoningEffort: string
+}
+
+const DEFAULT_MODEL_PRESET: DefaultModelState = {
+  provider: 'deepseek-official',
+  model: 'deepseek-v4-flash-vision-exp',
+  reasoningEffort: 'max',
+}
+
+function readDefaultModel(): DefaultModelState {
+  try {
+    const raw = window.localStorage.getItem(DEFAULT_MODEL_KEY)
+    if (raw !== null) {
+      const parsed: unknown = JSON.parse(raw)
+      if (parsed !== null && typeof parsed === 'object') {
+        const value = parsed as Record<string, unknown>
+        if (typeof value.provider === 'string' && typeof value.model === 'string') {
+          return {
+            provider: value.provider,
+            model: value.model,
+            reasoningEffort: typeof value.reasoningEffort === 'string' ? value.reasoningEffort : '',
+          }
+        }
+      }
+    }
+  } catch {
+    // Fall through to the preset below.
+  }
+  return { ...DEFAULT_MODEL_PRESET }
+}
+
+function writeDefaultModel(state: DefaultModelState): void {
+  try {
+    window.localStorage.setItem(DEFAULT_MODEL_KEY, JSON.stringify(state))
+  } catch {
+    // Optional persistence only.
+  }
+}
+
+function SettingsPane({ onBack, connection, groups }: {
+  onBack: () => void
+  connection?: StatsConnection
+  groups?: ReadonlyArray<{ id: string; models: ReadonlyArray<{ id: string; name: string; reasoning?: { efforts?: ReadonlyArray<{ id: string; name: string }> } }> }>
+}) {
   const statsEnabled = useSyncExternalStore(tokenStatsStore.subscribe, tokenStatsStore.getSnapshot)
   const sliderEnabled = useSyncExternalStore(sliderStore.subscribe, sliderStore.getSnapshot)
   const glmEnabled = useSyncExternalStore(glmReminderStore.subscribe, glmReminderStore.getSnapshot)
+  const glmLimitEnabled = useSyncExternalStore(glmLimitStore.subscribe, glmLimitStore.getSnapshot)
   const keepSnap = useSyncExternalStore(
     (notify) => keepAwakeScope?.subscribe(notify) ?? (() => undefined),
     () => keepAwakeScope?.getSnapshot() ?? EMPTY_SETTINGS_SNAPSHOT,
   )
   const keepEnabled = keepSnap.value?.keepAwake === true
+  const [settingsPath, setSettingsPath] = useState<string>(() => readSettingsPath())
+  const [pathState, setPathState] = useState<'idle' | 'opening' | 'ok' | 'fail'>('idle')
+  const [pathError, setPathError] = useState<string | null>(null)
+  const [defaultModel, setDefaultModel] = useState<DefaultModelState>(() => readDefaultModel())
+  const [defaultState, setDefaultState] = useState<'idle' | 'saving' | 'ok' | 'fail'>('idle')
+  const [defaultMsg, setDefaultMsg] = useState('')
+
+  useEffect(() => {
+    // 本地镜像为空时，从 Host 的 agent-default-model 命名空间加载当前默认值。
+    if (connection === undefined) return
+    let disposed = false
+    void connection.api.settings.describe({}).then((response) => {
+      if (disposed) return
+      const result = response?.result
+      if (result === undefined || !result.ok) return
+      const modelNs = result.value.namespaces.find((entry) => entry.ns === 'agent-default-model')
+      const modelValue = modelNs?.value
+      if (modelValue === null || modelValue === undefined || typeof modelValue !== 'object') return
+      const patch: DefaultModelState = { ...readDefaultModel() }
+      if (typeof modelValue.provider === 'string' && modelValue.provider !== '') patch.provider = modelValue.provider
+      if (typeof modelValue.model === 'string' && modelValue.model !== '') patch.model = modelValue.model
+      if (typeof modelValue.reasoningEffort === 'string') patch.reasoningEffort = modelValue.reasoningEffort
+      setDefaultModel(patch)
+      writeDefaultModel(patch)
+    }, () => undefined)
+    return () => {
+      disposed = true
+    }
+  }, [connection])
+
+  useEffect(() => {
+    if (settingsPath !== '' || connection === undefined) return
+    let disposed = false
+    void connection.api.host.describe({}).then((response) => {
+      if (disposed) return
+      const result = response?.result
+      if (result !== undefined && result.ok) {
+        const sep = result.value.home.includes('\\') ? '\\' : '/'
+        setSettingsPath(`${result.value.home}${sep}.dsh${sep}settings.yaml`)
+      }
+    }, () => undefined)
+    return () => {
+      disposed = true
+    }
+  }, [connection, settingsPath])
+
+  const openSettingsFile = async () => {
+    const path = settingsPath.trim()
+    if (connection === undefined || path === '') return
+    setPathState('opening')
+    setPathError(null)
+    try {
+      const response = await connection.api.host.openPath({ path })
+      const result = response?.result
+      if (result !== undefined && result.ok) {
+        setPathState('ok')
+        writeSettingsPath(path)
+      } else {
+        setPathState('fail')
+        setPathError(`${result?.error.code ?? 'unknown'}: ${result?.error.message ?? '打开失败'}`)
+      }
+    } catch (cause) {
+      setPathState('fail')
+      setPathError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
+  const saveDefaultModel = async () => {
+    if (connection === undefined) return
+    setDefaultState('saving')
+    setDefaultMsg('')
+    const patch: Record<string, unknown> = {
+      provider: defaultModel.provider,
+      model: defaultModel.model,
+    }
+    if (defaultModel.reasoningEffort.trim() !== '') {
+      patch.reasoningEffort = defaultModel.reasoningEffort.trim()
+    }
+    try {
+      const response = await connection.api.settings.update({ ns: 'agent-default-model', patch })
+      const result = response?.result
+      if (result !== undefined && result.ok) {
+        writeDefaultModel(defaultModel)
+        setDefaultState('ok')
+        setDefaultMsg('已保存，新对话将使用此配置')
+      } else {
+        setDefaultState('fail')
+        setDefaultMsg(`${result?.error.code ?? 'unknown'}: ${result?.error.message ?? '保存失败'}`)
+      }
+    } catch (cause) {
+      setDefaultState('fail')
+      setDefaultMsg(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
+  const openConfigDocument = async () => {
+    if (connection === undefined) return
+    setPathState('opening')
+    setPathError(null)
+    try {
+      const response = await connection.api.settings.openDocument({})
+      const result = response?.result
+      if (result !== undefined && result.ok) setPathState('ok')
+      else {
+        setPathState('fail')
+        setPathError(`${result?.error.code ?? 'unknown'}: ${result?.error.message ?? '打开失败'}`)
+      }
+    } catch (cause) {
+      setPathState('fail')
+      setPathError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
 
   return (
     <div className="re-pane-settings">
@@ -1209,6 +1564,248 @@ function SettingsPane({ onBack }: { onBack: () => void }) {
           <span className="re-setting-switch-knob" aria-hidden="true" />
         </button>
       </div>
+      <div className="re-pane-setting">
+        <div className="re-pane-setting-copy">
+          <div className="re-pane-setting-title">GLM 限额提醒</div>
+          <div className="re-pane-setting-desc">自动识别「已达到 5 小时的使用上限…限额将在 …重置」类报错（429/1308）并在输入框上方显示重置时间（智谱 GLM 文档：docs.bigmodel.cn/cn/guide/capabilities/thinking）</div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-label="启用 GLM 限额提醒"
+          aria-checked={glmLimitEnabled}
+          className={`re-setting-switch${glmLimitEnabled ? ' is-on' : ''}`}
+          onClick={() => glmLimitStore.set(!glmLimitEnabled)}
+        >
+          <span className="re-setting-switch-knob" aria-hidden="true" />
+        </button>
+      </div>
+      <div className="re-pane-setting is-path">
+        <div className="re-pane-setting-copy">
+          <div className="re-pane-setting-title">默认模型与思考强度</div>
+          <div className="re-pane-setting-desc">打开新对话时将使用此配置；预留默认：DeepSeek flash vision exp / max。其他模型（如 GLM）的思考档位可在配置文件中手动填写（详见下方模型配置）</div>
+        </div>
+        <div className="re-pane-path-row">
+          <select
+            className="re-timer-time re-pane-path"
+            value={`${defaultModel.provider}/${defaultModel.model}`}
+            onChange={(event) => {
+              const [provider, model] = event.currentTarget.value.split('/')
+              if (provider === undefined || model === undefined) return
+              setDefaultModel({ ...defaultModel, provider, model })
+              setDefaultState('idle')
+            }}
+          >
+            {(groups ?? []).flatMap((group) => group.models.map((model) => (
+              <option key={`${group.id}/${model.id}`} value={`${group.id}/${model.id}`}>{model.name}</option>
+            )))}
+            <option value={`${defaultModel.provider}/${defaultModel.model}`}>{defaultModel.model || '当前模型'}</option>
+          </select>
+          {(() => {
+            const effortOptions = (() => {
+              const group = (groups ?? []).find((candidate) => candidate.id === defaultModel.provider)
+              const model = group?.models.find((candidate) => candidate.id === defaultModel.model)
+              const efforts = model?.reasoning?.efforts ?? []
+              return efforts.length > 0
+                ? efforts
+                : [{ id: 'off', name: 'off' }, { id: 'low', name: 'low' }, { id: 'high', name: 'high' }, { id: 'max', name: 'max' }]
+            })()
+            const hasCurrent = effortOptions.some((option) => option.id === defaultModel.reasoningEffort)
+            return (
+              <select
+                className="re-timer-time re-pane-path"
+                value={defaultModel.reasoningEffort || ''}
+                onChange={(event) => {
+                  setDefaultModel({ ...defaultModel, reasoningEffort: event.currentTarget.value })
+                  setDefaultState('idle')
+                }}
+              >
+                {!hasCurrent ? <option value={defaultModel.reasoningEffort}>{defaultModel.reasoningEffort || '未设置'}</option> : null}
+                {effortOptions.map((option) => (
+                  <option key={option.id} value={option.id}>{option.name || option.id}</option>
+                ))}
+              </select>
+            )
+          })()}
+        </div>        <div className="re-pane-path-row">
+          <button
+            type="button"
+            className="re-defer-edit-ok"
+            disabled={defaultState === 'saving' || defaultModel.model.trim() === '' || defaultModel.provider.trim() === ''}
+            onClick={() => void saveDefaultModel()}
+          >
+            {defaultState === 'saving' ? '保存中…' : '保存默认'}
+          </button>
+          {defaultState === 'ok' ? <span className="re-pane-path-note is-ok">{defaultMsg}</span> : null}
+          {defaultState === 'fail' ? <span className="re-pane-path-note is-err">{defaultMsg}</span> : null}
+        </div>
+      </div>
+      <div className="re-pane-setting is-path">
+        <div className="re-pane-setting-copy">
+          <div className="re-pane-setting-title">模型配置</div>
+          <div className="re-pane-setting-desc">原始 JSON 编辑器（空间更大）位于 设置 → 插件 → 模型选择器增强；此处可快捷打开配置文档（settings.yaml）与凭据文件（.credentials.yaml）</div>
+        </div>
+        <div className="re-pane-path-row">
+          <button
+            type="button"
+            className="re-defer-edit-ok"
+            disabled={connection === undefined || pathState === 'opening'}
+            onClick={() => void openConfigDocument()}
+          >
+            {pathState === 'opening' ? '打开中…' : '打开配置文档'}
+          </button>
+          {pathState === 'ok' ? <span className="re-pane-path-note is-ok">已请求系统打开配置文档</span> : null}
+          {pathError !== null ? <span className="re-pane-path-note is-err">{pathError}</span> : null}
+        </div>
+        <CredentialOpenControl connection={connection} />
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// 模型配置块（完整版，供"设置 → 插件"大窗口使用）：打开配置文档 +
+// llm-* 命名空间原始 JSON 编辑器（与设置页显示的值一致）+ 保存。
+// 小浮窗 ⚙ 只保留快捷打开按钮（见 SettingsPane 精简版）。
+// ---------------------------------------------------------------------------
+function ModelConfigBlock({ connection }: { connection?: StatsConnection }) {
+  const [rawNs, setRawNs] = useState<string>('')
+  const [rawText, setRawText] = useState('')
+  const [rawState, setRawState] = useState<'idle' | 'saving' | 'ok' | 'fail'>('idle')
+  const [rawMsg, setRawMsg] = useState('')
+  const [pathState, setPathState] = useState<'idle' | 'opening' | 'ok' | 'fail'>('idle')
+  const [pathError, setPathError] = useState<string | null>(null)
+
+  const loadRawNamespace = (ns: string, namespaces: ReadonlyArray<{ ns: string; value?: Record<string, unknown> | null; revision: number }> | undefined) => {
+    const entry = namespaces?.find((item) => item.ns === ns)
+    const value = entry?.value
+    if (value === null || value === undefined) {
+      setRawText('')
+      return
+    }
+    setRawText(JSON.stringify(value, null, 2))
+    setRawState('idle')
+    setRawMsg('')
+  }
+
+  useEffect(() => {
+    if (connection === undefined) return
+    let disposed = false
+    void connection.api.settings.describe({}).then((response) => {
+      if (disposed) return
+      const result = response?.result
+      if (result === undefined || !result.ok) return
+      const namespaces = result.value.namespaces
+      const llmNamespaces = namespaces.filter((entry) => entry.ns.startsWith('llm-'))
+      if (rawNs === '' && llmNamespaces.length > 0) setRawNs(llmNamespaces[0].ns)
+      if (rawNs !== '') loadRawNamespace(rawNs, namespaces)
+    }, () => undefined)
+    return () => {
+      disposed = true
+    }
+  }, [connection, rawNs])
+
+  const openConfigDocument = async () => {
+    if (connection === undefined) return
+    setPathState('opening')
+    setPathError(null)
+    try {
+      const response = await connection.api.settings.openDocument({})
+      const result = response?.result
+      if (result !== undefined && result.ok) setPathState('ok')
+      else {
+        setPathState('fail')
+        setPathError(`${result?.error.code ?? 'unknown'}: ${result?.error.message ?? '打开失败'}`)
+      }
+    } catch (cause) {
+      setPathState('fail')
+      setPathError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
+  const saveRawConfig = async () => {
+    if (connection === undefined || rawNs === '') return
+    setRawState('saving')
+    setRawMsg('')
+    let patch: unknown
+    try {
+      patch = JSON.parse(rawText)
+    } catch (cause) {
+      setRawState('fail')
+      setRawMsg(cause instanceof Error ? `JSON 解析失败：${cause.message}` : 'JSON 解析失败')
+      return
+    }
+    if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) {
+      setRawState('fail')
+      setRawMsg('配置内容必须是对象')
+      return
+    }
+    try {
+      const response = await connection.api.settings.update({ ns: rawNs, patch })
+      const result = response?.result
+      if (result !== undefined && result.ok) {
+        setRawState('ok')
+        setRawMsg(`已保存 ${rawNs}`)
+      } else {
+        setRawState('fail')
+        setRawMsg(`${result?.error.code ?? 'unknown'}: ${result?.error.message ?? '保存失败'}`)
+      }
+    } catch (cause) {
+      setRawState('fail')
+      setRawMsg(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
+  return (
+    <div className="re-plugin-block">
+      <div className="re-plugin-block-title">模型配置</div>
+      <div className="re-plugin-block-desc">配置文档（settings.yaml）由 DSH 管理；下方可编辑 llm-* 命名空间的原始配置（与设置页显示的值一致），其他模型（GLM 等）的思考档位在此填写 reasoningEfforts</div>
+      <div className="re-pane-path-row">
+        <button
+          type="button"
+          className="re-defer-edit-ok"
+          disabled={connection === undefined || pathState === 'opening'}
+          onClick={() => void openConfigDocument()}
+        >
+          {pathState === 'opening' ? '打开中…' : '打开配置文档'}
+        </button>
+        {pathState === 'ok' ? <span className="re-pane-path-note is-ok">已请求系统打开配置文档</span> : null}
+        {pathError !== null ? <span className="re-pane-path-note is-err">{pathError}</span> : null}
+      </div>
+      <CredentialOpenControl connection={connection} />
+      <div className="re-pane-path-row">
+        <select
+          className="re-timer-time re-pane-path"
+          value={rawNs}
+          onChange={(event) => setRawNs(event.currentTarget.value)}
+        >
+          <option value="llm-deepseek">llm-deepseek</option>
+          <option value="llm-pi-ai">llm-pi-ai</option>
+        </select>
+        <button
+          type="button"
+          className="re-defer-edit-ok"
+          disabled={rawState === 'saving' || rawNs === ''}
+          onClick={() => void saveRawConfig()}
+        >
+          {rawState === 'saving' ? '保存中…' : '保存'}
+        </button>
+      </div>
+      <div className="re-pane-path-row">
+        <textarea
+          className="re-pane-raw re-pane-raw--wide"
+          value={rawText}
+          spellCheck={false}
+          placeholder="选择上方命名空间后显示其原始配置（JSON），可编辑后保存"
+          onChange={(event) => {
+            setRawText(event.currentTarget.value)
+            setRawState('idle')
+            setRawMsg('')
+          }}
+        />
+      </div>
+      {rawState === 'ok' ? <span className="re-pane-path-note is-ok">{rawMsg}</span> : null}
+      {rawState === 'fail' ? <span className="re-pane-path-note is-err">{rawMsg}</span> : null}
     </div>
   )
 }
@@ -1227,6 +1824,7 @@ function PluginConfigCard() {
   const sliderOn = useSyncExternalStore(sliderStore.subscribe, sliderStore.getSnapshot)
   const statsOn = useSyncExternalStore(tokenStatsStore.subscribe, tokenStatsStore.getSnapshot)
   const glmOn = useSyncExternalStore(glmReminderStore.subscribe, glmReminderStore.getSnapshot)
+  const glmLimitOn = useSyncExternalStore(glmLimitStore.subscribe, glmLimitStore.getSnapshot)
   const keepSnap = useSyncExternalStore(
     (notify) => keepAwakeScope?.subscribe(notify) ?? (() => undefined),
     () => keepAwakeScope?.getSnapshot() ?? EMPTY_SETTINGS_SNAPSHOT,
@@ -1335,6 +1933,24 @@ function PluginConfigCard() {
               <span className="re-setting-switch-knob" aria-hidden="true" />
             </button>
           </div>
+          <div className="re-plugin-row">
+            <div className="re-plugin-row-copy">
+              <div className="re-plugin-row-title">GLM 限额提醒</div>
+              <div className="re-plugin-row-desc">自动识别「已达到 5 小时的使用上限…限额将在 …重置」类报错并在输入框上方显示重置时间</div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-label="启用 GLM 限额提醒"
+              aria-checked={glmLimitOn}
+              disabled={!pluginOn}
+              className={`re-setting-switch${glmLimitOn ? ' is-on' : ''}`}
+              onClick={() => glmLimitStore.set(!glmLimitOn)}
+            >
+              <span className="re-setting-switch-knob" aria-hidden="true" />
+            </button>
+          </div>
+          <ModelConfigBlock connection={DEFERRED_CONNECTION} />
         </div>
       ) : null}
     </div>
@@ -1371,6 +1987,117 @@ function GlmHint({ now }: { now: number }) {
       </div>
     </div>
   )
+}
+
+// ---------------------------------------------------------------------------
+// 打开凭据文件控件：按钮（.credentials.yaml，系统默认应用打开）+ 失败时
+// 出现可编辑路径行（填写后记住）。settings.yaml 请用 settings.openDocument。
+// ---------------------------------------------------------------------------
+function CredentialOpenControl({ connection }: { connection?: StatsConnection }) {
+  const [state, setState] = useState<'idle' | 'opening' | 'ok' | 'fail'>('idle')
+  const [error, setError] = useState<string | null>(null)
+  const [pathDraft, setPathDraft] = useState('')
+
+  const open = async () => {
+    if (connection === undefined) return
+    setState('opening')
+    setError(null)
+    const outcome = await openCredentialsFile(connection)
+    if (outcome.opened) {
+      setState('ok')
+    } else {
+      setState('fail')
+      setError('未找到凭据文件（.credentials.yaml），请输入完整路径')
+      setPathDraft(readCredentialsPath())
+    }
+  }
+
+  const openExplicit = async () => {
+    if (connection === undefined || pathDraft.trim() === '') return
+    setState('opening')
+    setError(null)
+    if (await tryOpenHostPath(connection, pathDraft.trim())) {
+      writeCredentialsPath(pathDraft.trim())
+      setState('ok')
+    } else {
+      setState('fail')
+      setError('打开失败：' + pathDraft)
+    }
+  }
+
+  return (
+    <>
+      <div className="re-pane-path-row">
+        <button
+          type="button"
+          className="re-defer-edit-ok"
+          disabled={connection === undefined || state === 'opening'}
+          onClick={() => void open()}
+        >
+          {state === 'opening' ? '打开中…' : '打开凭据文件'}
+        </button>
+        {state === 'ok' ? <span className="re-pane-path-note is-ok">已请求系统打开凭据文件</span> : null}
+      </div>
+      {state === 'fail' ? (
+        <div className="re-pane-path-row">
+          <input
+            className="re-timer-time re-pane-path"
+            value={pathDraft}
+            placeholder="完整路径，如 D:\Data\.dsh\.credentials.yaml"
+            spellCheck={false}
+            onChange={(event) => setPathDraft(event.currentTarget.value)}
+          />
+          <button
+            type="button"
+            className="re-defer-edit-ok"
+            disabled={state === 'opening' || pathDraft.trim() === ''}
+            onClick={() => void openExplicit()}
+          >
+            打开
+          </button>
+          <span className="re-pane-path-note is-err">{error}</span>
+        </div>
+      ) : null}
+    </>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// GLM Coding Plan 限额提示（模型浮窗内，zai-coding-plan 组标题右侧）：
+// 自动识别「429: {"code":"1308","message":"已达到 5 小时的使用上限。您的
+// 限额将在 2026-08-29 08:25:04 重置。"}」类错误并展示重置时间与实时倒计时。
+// 默认开启；开关见 ⚙ 设置页 / 插件配置页。
+// ---------------------------------------------------------------------------
+interface GlmLimitNode {
+  kind: string
+  seq: number
+  message: string
+  code?: string
+}
+
+function findLastLimitError(nodes: readonly GlmLimitNode[] | undefined): GlmLimitNode | undefined {
+  if (nodes === undefined) return undefined
+  let found: GlmLimitNode | undefined
+  for (const node of nodes) {
+    if (node?.kind !== 'turn-error') continue
+    if (!node.message.includes('重置')) continue
+    if (!/\d{4}-\d{2}-\d{2}[ T]?\d{2}:\d{2}:\d{2}/.test(node.message)) continue
+    found = node
+  }
+  return found
+}
+
+/** 解析智谱 GLM 报错里的重置时间（北京时间，UTC+8）为 epoch 毫秒。 */
+function parseResetTime(message: string): number | null {
+  const match = message.match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/)
+  if (match === null) return null
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const hour = Number(match[4])
+  const minute = Number(match[5])
+  const second = Number(match[6])
+  return Date.UTC(year, month - 1, day, hour - 8, minute, second)
 }
 
 // ---------------------------------------------------------------------------
@@ -2375,6 +3102,8 @@ export function apply(ctx: ClientContext) {
         sliderStore.set(event.newValue !== 'false', false)
       } else if (event.key === GLM_REMINDER_STORAGE_KEY) {
         glmReminderStore.set(event.newValue === 'true', false)
+      } else if (event.key === GLM_LIMIT_ALERT_KEY) {
+        glmLimitStore.set(event.newValue !== 'false', false)
       } else if (event.key === ENABLED_STORAGE_KEY) {
         enabledStore.set(event.newValue !== 'false', false)
 
